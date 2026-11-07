@@ -1,7 +1,7 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    aasm (5.5.0)
+    aasm (6.0.0)
       concurrent-ruby (~> 1.0)
     action_text-trix (2.1.19)
       railties
@@ -798,7 +798,7 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
-  aasm (~> 5.3)
+  aasm (~> 6.0)
   active_record_union (~> 1.4)
   activerecord_json_validator (~> 3.1)
   after_commit_everywhere (~> 1.2)
