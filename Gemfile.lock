@@ -84,7 +84,7 @@ GEM
       uri (>= 0.13.1)
     addressable (2.9.0)
       public_suffix (>= 2.0.2, < 8.0)
-    after_commit_everywhere (1.4.0)
+    after_commit_everywhere (1.6.0)
       activerecord (>= 4.2)
       activesupport
     amazing_print (1.6.0)
@@ -801,7 +801,7 @@ DEPENDENCIES
   aasm (~> 5.3)
   active_record_union (~> 1.4)
   activerecord_json_validator (~> 3.1)
-  after_commit_everywhere (~> 1.2)
+  after_commit_everywhere (~> 1.6)
   amazing_print (~> 1.4)
   annotaterb (~> 4.23)
   awesome_print
