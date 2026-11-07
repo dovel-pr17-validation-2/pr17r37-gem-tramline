@@ -1,0 +1,12 @@
+refresh_external_apps:
+  cron: "0 */3 * * *"
+  class: "RefreshExternalAppsJob"
+  active_job: false
+schedule_train_releases:
+  cron: "0 */1 * * *"
+  class: "ScheduleTrainReleasesJob"
+  active_job: false
+verify_automatic_rollout:
+  cron: "*/15 * * * *"
+  class: "VerifyAutomaticRolloutJob"
+  active_job: false

@@ -1,0 +1,77 @@
+<div class="flex justify-between text-secondary text-sm">
+  <% if builds.present? %>
+    <span><strong><%= paginator.count %></strong> <%= "build".pluralize(paginator.count) %> found.</span>
+    <%= filter %>
+  <% else %>
+    <div class="text-secondary-50 text-xs">
+      Search by version or build number.
+    </div>
+  <% end %>
+</div>
+
+<% if builds.present? %>
+  <% builds.each do |build| %>
+    <%= render SectionComponent.new(style: :boxed, size: :micro) do %>
+      <div class="flex flex-col gap-y-2">
+        <div class="flex items-center justify-between border-default-b px-1 py-1 mb-3">
+          <div class="flex justify-start item-gap-default items-center">
+            <h2 class="heading-2 text-main dark:text-white font-normal">Build (<%= build.version_code %>)</h2>
+            <%= render IconComponent.new("#{build.platform}.svg", size: :lg) %>
+            <%= render BadgeComponent.new(text: "Built on #{time_format(build.built_at, with_year: true)}", kind: :badge) %>
+          </div>
+
+          <div class="flex justify-end gap-1">
+            <% if build.ci_link.present? %>
+              <%= render ButtonComponent.new(
+                    scheme: :light,
+                    options: build.ci_link,
+                    size: :xxs,
+                    type: :link_external,
+                    authz: false
+                  ) do |b|
+                    b.with_tooltip("CI workflow")
+                    b.with_icon("workflow.svg")
+                  end %>
+            <% end %>
+
+            <% if build.download_url.present? %>
+              <%= render ButtonComponent.new(
+                    scheme: :light,
+                    options: build.download_url,
+                    size: :xxs,
+                    type: :link_external,
+                    authz: false
+                  ) do |b|
+                    b.with_tooltip("Download build")
+                    b.with_icon("download.svg")
+                  end %>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="flex flex-col item-gap-default">
+          <%= render HorizontalDataSetComponent.new do |component| %>
+            <% component.with_data_set(title: "Version").with_content(build.version_name) %>
+            <% component.with_data_set(title: "Release Status") do %>
+              <%= render BadgeComponent.new(**release_status(build)) %>
+            <% end %>
+            <% component.with_data_set(title: "Train").with_content(build.train_name) %>
+            <% component.with_data_set(title: "Phase").with_content(build.kind.humanize) %>
+            <% component.with_data_set(title: "Submissions").with_content(submissions(build)) %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  <% end %>
+
+  <div class="pt-5">
+    <%= render PaginationComponent.new(results: paginator, turbo_frame: "all_builds", info: true) %>
+  </div>
+<% else %>
+  <%= render EmptyStateComponent.new(
+        title: "No builds found",
+        text: "No builds are available at this time.",
+        banner_image: "drill.svg",
+        type: :subdued
+      ) %>
+<% end %>

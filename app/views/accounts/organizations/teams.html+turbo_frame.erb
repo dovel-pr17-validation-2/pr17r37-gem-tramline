@@ -1,0 +1,5 @@
+<% component = EnhancedTurboFrameComponent.new(dom_id(current_organization, :edit_org)) %>
+<% component.with_loading_indicator %>
+<%= render component do %>
+  <%= render partial: "teams" %>
+<% end %>

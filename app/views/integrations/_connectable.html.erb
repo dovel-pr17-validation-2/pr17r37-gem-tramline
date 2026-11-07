@@ -1,0 +1,9 @@
+<%= form_with(model: [app, integration], method: :get, builder: EnhancedFormHelper::AuthzForm, url:, data: {turbo: false}) do |form| %>
+  <%= form.hidden_field :category, value: category %>
+
+  <%= form.fields_for :providable do |subform| %>
+    <%= subform.hidden_field :type, value: type %>
+  <% end %>
+
+  <%= form.authz_submit "Connect", "plus.svg", scheme: :light, size: :xxs %>
+<% end %>

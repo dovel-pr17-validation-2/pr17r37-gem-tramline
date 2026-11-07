@@ -1,0 +1,25 @@
+<% content_for :sticky_top_message do %>
+  <%= render AlertComponent.new(kind: :banner, type: :notice, title: "Need help?", info: {label: "Read docs", link: "https://docs.tramline.app"}) do %>
+    Contact us via the chat in the bottom right corner and we'll help you get setup with your release process.
+  <% end %>
+<% end %>
+
+<%= render ContainerComponent.new(title: "") do |container| %>
+  <% if @apps.blank? %>
+    <% container.with_empty_state do %>
+      <%= render EmptyStateComponent.new(title: "Create an app to get started",
+                                         text: "Once you add your app, you can then setup integrations and create your first release.",
+                                         banner_image: "art/no_releases.png") do %>
+        <%= render ModalComponent.new(title: "Add a new app", size: :xl_3, dismissable: false) do |modal| %>
+          <% modal.with_button(label: "Add a new app", scheme: :default, type: :action, size: :sm, arrow: :none)
+               .with_icon("plus.svg", size: :md) %>
+          <% modal.with_body do %>
+            <%= tag.turbo_frame id: :new_app_form do %>
+              <%= render partial: "apps/app_search_bar" %>
+            <% end %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>
+<% end %>

@@ -1,0 +1,317 @@
+class TrainsController < SignedInApplicationController
+  include Tabbable
+  include Loggable
+  using RefinedString
+  using RefinedInteger
+
+  before_action :require_write_access!, only: %i[new create update destroy activate deactivate archive]
+  before_action :set_train, only: %i[edit update destroy activate deactivate archive rules]
+  before_action :set_train_config_tabs, only: %i[edit update rules destroy activate deactivate]
+  before_action :ensure_app_ready, only: %i[new create edit update activate deactivate rules]
+  before_action :validate_integration_status, only: %i[new create]
+  before_action :set_notification_channels, only: %i[new create edit update]
+  around_action :set_time_zone
+
+  def new
+    @train = @app.trains.new
+  end
+
+  def edit
+    @edit_not_allowed = @train.active_runs.exists?
+  end
+
+  def rules
+    @unconfigured = @train.monitoring_provider.nil?
+  end
+
+  def create
+    @train = @app.trains.new(parsed_train_params)
+
+    if @train.save
+      new_train_redirect
+    else
+      render :new, status: :unprocessable_entity
+    end
+  rescue Installations::Error => ex
+    elog(ex, level: :debug)
+    flash[:error] = "Failed to create the release train as some of your integrations are not configured correctly. Please use the chat icon at the bottom right to contact support."
+    render :new, status: :unprocessable_entity
+  end
+
+  def update
+    if @train.update(parsed_train_update_params)
+      redirect_to edit_app_train_path(@app, @train), notice: "Train was updated."
+    else
+      @edit_not_allowed = false
+      render :edit, status: :unprocessable_entity
+    end
+  end
+
+  def destroy
+    if @train.destroy
+      redirect_to app_path(@app), status: :see_other, notice: "Train was removed!"
+    else
+      train_redirect_back("Could not remove the train. #{@train.errors.full_messages.to_sentence}.")
+    end
+  end
+
+  def activate
+    if @train.activate!
+      redirect_to train_path, notice: "Train was activated!"
+    else
+      train_redirect_back("Could not activate the train. #{@train.errors.full_messages.to_sentence}.")
+    end
+  end
+
+  def deactivate
+    redirect_to train_path, notice: "Can not deactivate with an ongoing release" and return if @train.active_runs.exists?
+
+    if @train.deactivate!
+      redirect_to train_path, notice: "Train was deactivated!"
+    else
+      train_redirect_back("Could not deactivate the train. #{@train.errors.full_messages.to_sentence}.")
+    end
+  end
+
+  def archive
+    redirect_to train_path, alert: "Cannot archive a train with active releases" and return if @train.active_runs.exists?
+
+    if @train.discard
+      redirect_to app_path(@app), status: :see_other, notice: "Train was archived!"
+    else
+      train_redirect_back("Could not archive the train.")
+    end
+  end
+
+  private
+
+  def new_train_redirect
+    if @app.trains.size == 1
+      redirect_to app_path(@app), notice: "Train was successfully created."
+    else
+      platform = @train.release_platforms.first.platform
+      redirect_to edit_app_train_platform_submission_config_path(@app, @train, platform), notice: "Train was successfully created."
+    end
+  end
+
+  def train_redirect_back(message)
+    redirect_back fallback_location: app_train_releases_path(@app, @train), flash: {error: message}
+  end
+
+  def set_train
+    @train = @app.trains.friendly.find(params[:id])
+  end
+
+  def train_params
+    params.require(:train).permit(
+      :name,
+      :description,
+      :working_branch,
+      :working_repo,
+      :freeze_version,
+      :version_seeded_with,
+      :major_version_seed,
+      :minor_version_seed,
+      :patch_version_seed,
+      :branching_strategy,
+      :versioning_strategy,
+      :release_backmerge_branch,
+      :release_branch,
+      :kickoff_at,
+      :repeat_duration_value,
+      :repeat_duration_unit,
+      :notification_channel,
+      :notifications_release_specific_channel_enabled,
+      :build_queue_enabled,
+      :build_queue_size,
+      :build_queue_wait_time_unit,
+      :build_queue_wait_time_value,
+      :release_schedule_enabled,
+      :stop_automatic_releases_on_failure,
+      :backmerge_strategy,
+      :continuous_backmerge_branch_prefix,
+      :compact_build_notes,
+      :tag_store_releases,
+      :tag_store_releases_vcs_release,
+      :tag_store_releases_with_platform_names,
+      :notifications_enabled,
+      :tag_end_of_release,
+      :tag_end_of_release_prefix,
+      :tag_end_of_release_suffix,
+      :tag_end_of_release_vcs_release,
+      :patch_version_bump_only,
+      :approvals_enabled,
+      :copy_approvals,
+      :auto_apply_patch_changes,
+      :version_bump_enabled,
+      :version_bump_file_paths,
+      :version_bump_branch_prefix,
+      :version_bump_strategy,
+      :release_branch_pattern,
+      :enable_changelog_linking_in_notifications,
+      :webhooks_enabled,
+      :soak_period_enabled,
+      :soak_period_hours,
+      :allow_upcoming_release_submissions
+    )
+  end
+
+  def parsed_train_params
+    release_schedule_params = release_schedule_config(train_params.slice(*release_schedule_config_params))
+    create_params = train_params
+      .merge(build_queue_config(train_params.slice(*build_queue_config_params)))
+      .merge(notifications_config(train_params[:notifications_enabled]))
+      .merge(version_bump_file_paths: train_params.fetch(:version_bump_file_paths, "")&.safe_csv_parse(coerce_string: true))
+      .except(:build_queue_wait_time_value, :build_queue_wait_time_unit, :notifications_enabled)
+      .except(*release_schedule_config_params)
+    create_params.merge!(release_schedule_params) if release_schedule_params
+    create_params
+  end
+
+  def train_update_params
+    params.require(:train).permit(
+      :name,
+      :description,
+      :notification_channel,
+      :notifications_release_specific_channel_enabled,
+      :build_queue_enabled,
+      :freeze_version,
+      :build_queue_size,
+      :build_queue_wait_time_unit,
+      :build_queue_wait_time_value,
+      :kickoff_at,
+      :repeat_duration_value,
+      :repeat_duration_unit,
+      :release_schedule_enabled,
+      :stop_automatic_releases_on_failure,
+      :backmerge_strategy,
+      :continuous_backmerge_branch_prefix,
+      :compact_build_notes,
+      :tag_store_releases,
+      :tag_store_releases_vcs_release,
+      :tag_store_releases_with_platform_names,
+      :notifications_enabled,
+      :tag_end_of_release,
+      :tag_end_of_release_prefix,
+      :tag_end_of_release_suffix,
+      :tag_end_of_release_vcs_release,
+      :patch_version_bump_only,
+      :approvals_enabled,
+      :copy_approvals,
+      :auto_apply_patch_changes,
+      :version_bump_enabled,
+      :version_bump_file_paths,
+      :version_bump_branch_prefix,
+      :version_bump_strategy,
+      :release_branch_pattern,
+      :enable_changelog_linking_in_notifications,
+      :webhooks_enabled,
+      :soak_period_enabled,
+      :soak_period_hours,
+      :allow_upcoming_release_submissions
+    )
+  end
+
+  def parsed_train_update_params
+    release_schedule_params = release_schedule_config(train_update_params.slice(*release_schedule_config_params))
+    update_params = train_update_params
+      .merge(build_queue_config(train_update_params.slice(*build_queue_config_params)))
+      .merge(notifications_update_config(train_update_params[:notifications_enabled]))
+      .merge(version_bump_file_paths: train_params.fetch(:version_bump_file_paths, "").safe_csv_parse(coerce_string: true))
+      .except(:build_queue_wait_time_value, :build_queue_wait_time_unit)
+      .except(*release_schedule_config_params)
+    update_params.merge!(release_schedule_params) if release_schedule_params
+    update_params
+  end
+
+  def validate_integration_status
+    redirect_to app_path, alert: "Cannot create trains before notifiers are complete." unless @app.ready?
+  end
+
+  def train_path
+    app_train_releases_path(@app, @train)
+  end
+
+  def set_notification_channels
+    @notification_channels = @app.notification_provider.channels if @app.notifications_set_up?
+    @current_notification_channel = @train&.notification_channel
+    ensure_current_channel_in_options
+  end
+
+  # Guarantee the configured channel is always present as a selectable option,
+  # even if it is missing from the fetched channel list (archived, or a
+  # truncated/failed fetch). Without this the select renders with nothing
+  # selected and submits blank, which would drop the channel on the next save.
+  def ensure_current_channel_in_options
+    return if @notification_channels.blank? || @current_notification_channel.blank?
+    current = @current_notification_channel.symbolize_keys
+    return if @notification_channels.any? { |chan| chan[:id] == current[:id] }
+    @notification_channels += [current]
+  end
+
+  def build_queue_config_params
+    [:build_queue_size, :build_queue_enabled, :build_queue_wait_time_value, :build_queue_wait_time_unit]
+  end
+
+  def build_queue_config(config_params)
+    unless config_params[:build_queue_enabled] == "true"
+      return {
+        build_queue_size: nil,
+        build_queue_wait_time: nil
+      }
+    end
+
+    return if config_params[:build_queue_wait_time_unit].blank?
+    return if config_params[:build_queue_wait_time_value].blank?
+    return if config_params[:build_queue_size].blank?
+
+    {
+      build_queue_wait_time: parsed_duration(config_params[:build_queue_wait_time_value], config_params[:build_queue_wait_time_unit]),
+      build_queue_size: config_params[:build_queue_size]
+    }
+  end
+
+  def release_schedule_config_params
+    [:release_schedule_enabled, :kickoff_at, :repeat_duration_value, :repeat_duration_unit, :stop_automatic_releases_on_failure]
+  end
+
+  def release_schedule_config(config_params)
+    return if config_params[:release_schedule_enabled].blank?
+
+    {
+      repeat_duration: parsed_duration(config_params[:repeat_duration_value], config_params[:repeat_duration_unit]),
+      kickoff_at: config_params[:kickoff_at], # Store as-is (naive datetime)
+      stop_automatic_releases_on_failure: config_params[:stop_automatic_releases_on_failure]
+    }
+  end
+
+  def parsed_duration(value, unit)
+    return if unit.blank? || value.blank?
+    value.to_i.as_duration_with(unit: unit)
+  end
+
+  def notifications_config(notifications_enabled)
+    if notifications_enabled.blank? || notifications_enabled == "false"
+      {notification_channel: nil}
+    elsif notifications_enabled == "true"
+      {notification_channel: train_params[:notification_channel]&.safe_json_parse}
+    end
+  end
+
+  # On update, a blank notification_channel while notifications are enabled is
+  # treated as "unchanged" rather than "clear". This guards against silently
+  # wiping the configured channel when the select submits blank because the
+  # stored channel was missing from the fetched Slack channel list (archived,
+  # or a truncated/failed channel fetch). Clearing only happens when
+  # notifications are explicitly disabled.
+  def notifications_update_config(notifications_enabled)
+    if notifications_enabled.blank? || notifications_enabled == "false"
+      {notification_channel: nil}
+    elsif notifications_enabled == "true"
+      channel = train_update_params[:notification_channel]&.safe_json_parse
+      # Preserve the currently stored channel when the field submits blank, so an
+      # empty select (stored channel missing from the fetched list) cannot wipe it.
+      channel.present? ? {notification_channel: channel} : {notification_channel: @train.notification_channel}
+    end
+  end
+end

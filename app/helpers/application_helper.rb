@@ -1,0 +1,192 @@
+module ApplicationHelper
+  using RefinedString
+
+  NOT_AVAILABLE = "⃠"
+
+  STATUS_COLOR_PALETTE = {
+    success: %w[bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300],
+    failure: %w[bg-rose-100 text-rose-800 dark:bg-red-900 dark:text-red-300],
+    routine: %w[bg-sky-100 text-sky-600],
+    neutral: %w[bg-slate-100 text-slate-500],
+    ongoing: %w[bg-indigo-100 text-indigo-600],
+    inert: %w[bg-amber-100 text-amber-800]
+  }
+
+  STATUS_BORDER_COLOR_PALETTE = {
+    success: "border-green-700",
+    failure: "border-red-700",
+    neutral: "border-slate-200"
+  }
+
+  PILL_STATUS_COLOR_PALETTE = {
+    success: %w[bg-green-500],
+    failure: %w[bg-red-500],
+    routine: %w[bg-sky-500],
+    ongoing: %w[bg-indigo-500],
+    inert: %w[bg-amber-500],
+    neutral: %w[bg-slate-500]
+  }
+
+  PROGRESS_BAR_COLOR_PALETTE = {
+    default: "bg-blue-600 dark:bg-blue-500",
+    inert: "bg-main-400 dark:bg-main-200"
+  }
+
+  def setup_instruction_color(is_completed)
+    is_completed ? "bg-green-400" : "bg-blue-200"
+  end
+
+  def status_picker(picker, status)
+    picker[status.to_sym] || {text: status.humanize, status: :neutral}
+  end
+
+  def resolve_color(color)
+    if color.to_sym.in?(%i[excellent acceptable mediocre])
+      "var(--color-reldex-#{color})"
+    else
+      color
+    end
+  end
+
+  def toggle_for(hide, full_width: false, &block)
+    render(
+      partial: "shared/toggle_button",
+      locals: {
+        hide: hide, block: block, full_width: full_width
+      }
+    )
+  end
+
+  def version_in_progress(version)
+    version.to_semverish.to_s(patch_glob: true)
+  end
+
+  def ago_in_words(time, prefix: nil, suffix: "ago")
+    return "N/A" unless time
+    builder = ""
+    builder += "#{prefix} " if prefix
+    builder += time_ago_in_words(time, include_seconds: true)
+    builder += " #{suffix}" if suffix
+    builder
+  end
+
+  def time_in_words(time)
+    (time.presence && time_ago_in_words(time, include_seconds: true)) || "N/A"
+  end
+
+  def current_deploy
+    {
+      ref: Site.git_ref,
+      ago: ago_in_words(Site.git_ref_at)
+    }
+  end
+
+  def status_badge(status, custom = [], fixed = nil, pulse: false, classes: nil)
+    return if status.blank?
+
+    styles =
+      case custom
+      when Array
+        if fixed.nil?
+          custom
+        else
+          custom.concat(STATUS_COLOR_PALETTE[fixed])
+        end
+      when Symbol
+        STATUS_COLOR_PALETTE[custom]
+      else
+        STATUS_COLOR_PALETTE[fixed] unless fixed.nil?
+      end
+
+    badge_classes = %w[text-xs uppercase tracking-wide inline-flex font-medium rounded-full text-center px-2 py-0.5]
+    badge_classes << "animate-pulse" if pulse
+    badge_classes.concat(styles) if styles
+    badge_classes << classes if classes
+    content_tag(:span, status, class: badge_classes)
+  end
+
+  def display_channels(channels, with_none: false)
+    channels
+      .map { |chan| [yield(chan), chan.to_json] }
+      .tap { |list| with_none ? list.unshift(["None", nil]) : nil }
+  end
+
+  def time_format(timestamp, with_year: false, with_tz: false, with_time: true, only_time: false, only_date: false, dash_empty: false, only_day: false)
+    return "--" if dash_empty && timestamp.nil?
+    return unless timestamp
+    return timestamp.strftime("%-l:%M %P") if only_time
+    return timestamp.strftime("#{timestamp.day.ordinalize} %b") if only_day
+    return timestamp.strftime("%A #{timestamp.day.ordinalize} %B, %Y") if only_date
+    timestamp.strftime("%b #{timestamp.day.ordinalize}#{", %Y" if with_year}#{" at %-l:%M %P" if with_time}#{" (%Z)" if with_tz}")
+  end
+
+  def short_sha(sha)
+    sha[0, 7]
+  end
+
+  def user_avatar(name, **)
+    Initials.svg(name, **)
+  end
+
+  def comment
+  end
+
+  def duration_in_words(seconds)
+    return NOT_AVAILABLE unless seconds
+    distance_of_time_in_words(0, seconds, include_seconds: true)
+  end
+
+  def page_title(page_name, current_organization, app, release)
+    suffix = I18n.t("page_titles.default_suffix", default: "Tramline")
+    middle_section = app&.name || current_organization&.name
+    prefix = release&.release_version.presence || page_name || middle_section
+
+    [prefix&.titleize, middle_section, suffix&.titleize].compact.join(" | ")
+  end
+
+  def list_to_csv(list)
+    list.map(&:to_s).join(",")
+  end
+
+  def release_specific_channel_pattern(app)
+    platform = app.cross_platform? ? "" : "-#{app.platform}"
+    channel_pattern = "release-#{app.name}#{platform}".downcase.gsub(/\W/, "-")
+    "#{channel_pattern}-{version}"
+  end
+
+  def iana_timezone(timezone)
+    ActiveSupport::TimeZone[timezone].tzinfo.name
+  end
+
+  def time_now_in_timezone(timezone)
+    Time.current.in_time_zone(timezone).beginning_of_minute
+  end
+
+  # Build the [name, id] option pairs for a workflow select, always including
+  # the currently-configured workflow. The CI provider list (ci_actions) can
+  # come back empty or stale on a transient API miss; folding the configured
+  # value in guarantees the dropdown keeps a valid selection that round-trips
+  # on save instead of posting a blank identifier.
+  def workflow_select_options(ci_actions, current_workflow)
+    actions = Array(ci_actions)
+    identifier = current_workflow&.identifier
+
+    if identifier.present? && actions.none? { |a| a[:id] == identifier }
+      actions = [{id: identifier, name: current_workflow.name.presence || identifier}] + actions
+    end
+
+    actions.map { |c| [c[:name], c[:id]] }
+  end
+
+  def release_schedule(train)
+    if train.automatic?
+      kickoff_time = train.kickoff_at_app_time
+      date = time_format(kickoff_time, with_year: true, with_time: false)
+      duration = train.repeat_duration.inspect
+      time = kickoff_time.strftime("%I:%M%p (%Z)")
+      "Kickoff at #{date} – runs every #{duration} at #{time}"
+    else
+      "No release schedule"
+    end
+  end
+end

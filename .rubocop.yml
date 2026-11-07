@@ -1,0 +1,72 @@
+require:
+  - standard
+  - rubocop-rails
+  - rubocop-rspec
+  - rubocop-rspec_rails
+  - rubocop-factory_bot
+  - rubocop-performance
+
+inherit_gem:
+  standard: config/ruby-3.3.yml
+
+inherit_from: .rubocop_todo.yml
+
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable
+  Exclude:
+    - .irbrc
+    - bin/**/*
+    - bundle/**/*
+    - public/**/*
+    - vendor/**/*
+    - tmp/**/*
+    - db/schema.rb
+    - db/data/*
+    - db/migrate/*
+
+Rails:
+  Enabled: true
+
+Rails/EnumSyntax:
+  Enabled: true
+
+Rails/TransactionExitStatement:
+  Enabled: false # intentional use of return inside transactions
+
+Rails/ReversibleMigration:
+  Enabled: false # use strong_migrations instead
+
+Rails/UniqBeforePluck:
+  Enabled: false # https://github.com/rubocop/rubocop/issues/3148
+
+Rails/EagerEvaluationLogMessage:
+  Enabled: true
+
+RSpec:
+  Enabled: true
+
+RSpec/ExampleLength:
+  Enabled: false
+
+RSpec/AnyInstance:
+  Enabled: false
+
+RSpec/MultipleExpectations:
+  Max: 6
+
+RSpec/NestedGroups:
+  Max: 4
+
+RSpec/MultipleMemoizedHelpers:
+  Max: 15
+
+RSpec/MessageChain:
+  Enabled: false
+
+Performance:
+  Enabled: true
+
+Lint/UnreachableCode:
+  Exclude:
+    - db/data/*

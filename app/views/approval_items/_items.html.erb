@@ -1,0 +1,85 @@
+<% if release.approvals_finished? %>
+  <%= render AlertComponent.new(type: :success, title: ApprovalsPresenter::APPROVED_NOTICE, full_screen: false) %>
+<% end %>
+
+<% if release.approvals_overridden? %>
+  <%= render AlertComponent.new(type: :notice, title: ApprovalsPresenter::FORCE_APPROVED_NOTICE, full_screen: false) %>
+<% end %>
+
+<div class="flex flex-col section-gap-default mt-2">
+  <%= render CardComponent.new(title: "Items", separator: false, size: :full) do |card| %>
+    <% if release.approvals_editable? %>
+      <% card.with_action do %>
+        <%= render ButtonComponent.new(
+              scheme: :light,
+              options: copy_approvals_release_path(release),
+              type: :button,
+              disabled: release.copy_approvals_disabled?,
+              size: :xxs,
+              label: "Copy from previous release",
+              html_options: {
+                method: :post,
+                data: {
+                  turbo_method: :post,
+                  turbo_confirm: "This will copy all the release approvals from the last release. Are you sure?"
+                }
+              }
+            ) do |b| %>
+          <%= b.with_icon("square_stack.svg", size: :sm) %>
+        <% end %>
+      <% end %>
+      <% card.with_action do %>
+        <%= render ModalComponent.new(title: "Add approval item", dismissable: false) do |modal| %>
+          <% modal.with_button(label: "Add", scheme: :light, type: :action, size: :xxs, arrow: :none)
+               .with_icon("plus.svg", size: :md) %>
+          <% modal.with_body do %>
+            <%= render partial: "form", locals: {
+                  model: [release, release.approval_items.new],
+                  url: release_approval_items_path(release),
+                  select_options: ApprovalsPresenter.available_assignee_options(available_assignees)
+                } %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <% if release.approvals_blocking? %>
+      <% card.with_action do %>
+        <%= render ButtonComponent.new(
+              scheme: :danger,
+              label: "Override approvals",
+              options: override_approvals_release_path(release),
+              type: :button,
+              html_options:
+                {method: :patch,
+                 data: {turbo_method: :patch,
+                        turbo_confirm: "This will override all the release approvals. Are you sure?"}}
+            ) do |b|
+              b.with_icon("key_square.svg")
+            end %>
+      <% end %>
+    <% end %>
+
+    <% if items.none? %>
+      <%= render EmptyStateComponent.new(text: "There are no items to approve for this release. Add approvals to block submissions for this release.", banner_image: "list_checks.svg", type: :tiny) %>
+    <% else %>
+      <%= render TableComponent.new(columns: ["", ""]) do |table| %>
+        <% items.each do |item| %>
+          <% table.with_row do |row| %>
+            <% row.with_cell do %>
+              <%= render partial: "item_content", locals: {item:} %>
+            <% end %>
+
+            <% row.with_cell(wrap: true) do %>
+              <%= render partial: "item_select", locals: {release:, item:} %>
+            <% end %>
+          <% end %>
+        <% end %>
+      <% end %>
+
+      <div class="text-secondary text-xs">
+        † Use the dropdown to change the status of any item. Once an item is approved, it cannot be reverted back.
+      </div>
+    <% end %>
+  <% end %>
+</div>

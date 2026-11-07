@@ -1,0 +1,31 @@
+<%= render StatCardComponent.new(name, size:, external_url:, external_url_title: "Go to dashboard") do |stat| %>
+  <% stat.with_icon(helpers.integration_logo(provider), size: :md, rounded: false) if provider %>
+
+  <div class="grid grid-cols-2 divide-x place-content-between">
+    <% values.each do |key, val| %>
+      <div class="flex flex-col py-1 first:px-0 px-3 gap-y-1">
+        <div class="text-xs text-secondary-50 uppercase"><%= key %></div>
+        <% if health_defined?(val) %>
+          <div class="text-base <%= metric_color(val[:is_healthy]) %>">
+            <%= render TooltipComponent.new(nil, placement: "top", type: :detailed) do |tooltip| %>
+              <% tooltip.with_detailed_text do %>
+                <div class="flex flex-col gap-2 items-start">
+                  <% rules_for(val).each do |rule| %>
+                    <%= rule_description(rule) %>
+                  <% end %>
+                </div>
+              <% end %>
+              <% tooltip.with_body do %>
+                <%= val[:value] %>
+              <% end %>
+            <% end %>
+          </div>
+        <% else %>
+          <div class="text-base text-main dark:text-white">
+            <%= val[:value] %>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+<% end %>

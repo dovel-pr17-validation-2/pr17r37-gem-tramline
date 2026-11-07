@@ -1,0 +1,326 @@
+require "rails_helper"
+
+describe PlayStoreSubmission do
+  it "has a valid factory" do
+    expect(create(:play_store_submission)).to be_valid
+  end
+
+  describe "#submission_channel_id" do
+    let(:pre_prod_release) { create(:beta_release) }
+    let(:workflow_run) { create(:workflow_run, :rc, :finished, triggering_release: pre_prod_release) }
+    let(:build) { create(:build, workflow_run:, release_platform_run: pre_prod_release.release_platform_run) }
+
+    context "when identifier has no form factor prefix" do
+      let(:submission) { create(:play_store_submission, parent_release: pre_prod_release, build:) }
+
+      it "returns the base identifier" do
+        expect(submission.submission_channel_id).to eq("production")
+      end
+    end
+
+    context "when identifier has a form factor prefix" do
+      it "returns the full identifier with wear prefix" do
+        submission = create(:play_store_submission, parent_release: pre_prod_release, build:)
+        submission.config["submission_config"]["id"] = "wear:production"
+        submission.save!
+
+        expect(submission.submission_channel_id).to eq("wear:production")
+      end
+
+      it "returns the full identifier with tv prefix" do
+        submission = create(:play_store_submission, parent_release: pre_prod_release, build:)
+        submission.config["submission_config"]["id"] = "tv:production"
+        submission.save!
+
+        expect(submission.submission_channel_id).to eq("tv:production")
+      end
+
+      it "returns the full identifier with automotive prefix" do
+        submission = create(:play_store_submission, parent_release: pre_prod_release, build:)
+        submission.config["submission_config"]["id"] = "automotive:production"
+        submission.save!
+
+        expect(submission.submission_channel_id).to eq("automotive:production")
+      end
+    end
+  end
+
+  describe ".start_release!" do
+    let(:pre_prod_release) { create(:beta_release) }
+    let(:workflow_run) { create(:workflow_run, :rc, :finished, triggering_release: pre_prod_release) }
+    let(:build) { create(:build, workflow_run:, release_platform_run: pre_prod_release.release_platform_run) }
+    let(:submission) { create(:play_store_submission, :preparing, parent_release: pre_prod_release, build:) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow_any_instance_of(described_class).to receive(:provider).and_return(providable_dbl)
+      allow_any_instance_of(PlayStoreRollout).to receive(:provider).and_return(providable_dbl)
+      allow(providable_dbl).to receive(:public_icon_img)
+      allow(providable_dbl).to receive(:project_link)
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "creates draft release" do
+      allow(providable_dbl).to receive_messages(create_draft_release: GitHub::Result.new, rollout_release: GitHub::Result.new)
+      submission.prepare_for_release!
+      expect(providable_dbl).to have_received(:create_draft_release)
+        .with("production",
+          build.build_number,
+          build.version_name,
+          [{language: "en-US",
+            text: "The latest version contains bug fixes and performance improvements."}], anything)
+    end
+
+    it "creates draft release with form factor prefixed track" do
+      submission.config["submission_config"]["id"] = "wear:production"
+      submission.save!
+
+      allow(providable_dbl).to receive_messages(create_draft_release: GitHub::Result.new, rollout_release: GitHub::Result.new)
+      submission.prepare_for_release!
+      expect(providable_dbl).to have_received(:create_draft_release)
+        .with("wear:production",
+          build.build_number,
+          build.version_name,
+          [{language: "en-US",
+            text: "The latest version contains bug fixes and performance improvements."}], anything)
+    end
+
+    it "marks the submission as prepared" do
+      allow(providable_dbl).to receive_messages(create_draft_release: GitHub::Result.new, rollout_release: GitHub::Result.new)
+      expect { submission.prepare_for_release! }.to change(submission, :prepared?)
+    end
+
+    context "when review fails" do
+      it "retries (with skip review) when its an internal channel" do
+        internal_submission = create(:play_store_submission, :preparing, :with_internal_channel, parent_release: pre_prod_release, build:)
+        allow(providable_dbl).to receive_messages(create_draft_release: GitHub::Result.new, rollout_release: GitHub::Result.new)
+
+        expect { internal_submission.prepare_for_release! }.to change(internal_submission, :prepared?)
+        expect(providable_dbl).to have_received(:create_draft_release).with(anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: true)
+      end
+
+      it "marks the submission as failed with manual action required" do
+        allow(providable_dbl).to receive(:create_draft_release).and_return(GitHub::Result.new { raise play_store_review_error })
+        expect { submission.prepare_for_release! }.to change(submission, :failed_with_action_required?)
+      end
+
+      it "marks the release platform run as blocked for submissions" do
+        allow(providable_dbl).to receive(:create_draft_release).and_return(GitHub::Result.new { raise play_store_review_error })
+        submission.prepare_for_release!
+        expect(submission.release_platform_run.play_store_blocked?).to be true
+      end
+    end
+
+    it "updates the external release status" do
+      allow(providable_dbl).to receive_messages(create_draft_release: GitHub::Result.new, rollout_release: GitHub::Result.new)
+      submission.prepare_for_release!
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to have_received(:perform_async).with(submission.id).at_least(:once)
+    end
+  end
+
+  describe ".retry" do
+    let(:pre_prod_release) { create(:pre_prod_release, :single_submission) }
+    let(:workflow_run) { create(:workflow_run, triggering_release: pre_prod_release) }
+    let(:build) { create(:build, workflow_run:) }
+    let(:submission) { create(:play_store_submission, :failed_with_action_required, parent_release: pre_prod_release, build:) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow_any_instance_of(described_class).to receive(:provider).and_return(providable_dbl)
+      allow(providable_dbl).to receive(:public_icon_img)
+      allow(providable_dbl).to receive(:project_link)
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "marks the submission as manually finished if the issue is resolved" do
+      allow(providable_dbl).to receive(:build_present_in_channel?).and_return(true)
+      expect { submission.retry! }.to change(submission, :finished_manually?).from(false).to(true)
+    end
+
+    it "does not do anything if the issue is not resolved" do
+      allow(providable_dbl).to receive(:build_present_in_channel?).and_return(false)
+      submission.retry!
+      expect(submission.finished_manually?).to be(false)
+      expect(submission.failed_with_action_required?).to be(true)
+    end
+  end
+
+  describe "#fully_release_previous_production_rollout!" do
+    let(:train) { create(:train) }
+    let(:release_platform) { create(:release_platform, train:, platform: "android") }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      release_platform.platform_config.production_release.submissions.first.update!(
+        finish_rollout_in_next_release: true,
+        rollout_stages: [1, 2, 5, 10, 20, 50, 99.9]
+      )
+      allow(providable_dbl).to receive(:find_build_in_track).and_return({status: "inProgress"})
+      allow_any_instance_of(PlayStoreRollout).to receive(:provider).and_return(providable_dbl)
+    end
+
+    it "skips if the current rollout exists" do
+      prev_rollout = create_production_rollout_tree(train, release_platform).dig(:store_rollout)
+      create_production_rollout_tree(
+        train,
+        release_platform,
+        release_traits: [:on_track],
+        rollout_status: :created,
+        skip_rollout: false
+      ) => { store_submission: }
+
+      store_submission.fully_release_previous_production_rollout!
+
+      expect(prev_rollout.reload.status).to eq("completed")
+    end
+
+    it "skips if the config is not set to finish previous rollout" do
+      prev_rollout = create_production_rollout_tree(train, release_platform).dig(:store_rollout)
+      create_production_rollout_tree(
+        train,
+        release_platform,
+        release_traits: [:on_track],
+        rollout_status: :started,
+        skip_rollout: true
+      ) => { store_submission: }
+      store_submission.update!(config: store_submission.config.merge(finish_rollout_in_next_release: false))
+
+      store_submission.fully_release_previous_production_rollout!
+
+      expect(prev_rollout.reload.status).to eq("completed")
+    end
+
+    it "skips if the submission is not in a created state" do
+      prev_rollout = create_production_rollout_tree(train, release_platform).dig(:store_rollout)
+      create_production_rollout_tree(
+        train,
+        release_platform,
+        release_traits: [:on_track],
+        rollout_status: :started,
+        submission_status: :preprocessing,
+        skip_rollout: true
+      ) => { store_submission: }
+
+      store_submission.fully_release_previous_production_rollout!
+
+      expect(prev_rollout.reload.status).to eq("completed")
+    end
+
+    it "skips if the previous rollout is not in progress on the store" do
+      prev_rollout = create_production_rollout_tree(train, release_platform).dig(:store_rollout)
+      create_production_rollout_tree(
+        train,
+        release_platform,
+        release_traits: [:on_track],
+        rollout_status: :started,
+        skip_rollout: true
+      ) => { store_submission: }
+      allow(providable_dbl).to receive_messages(build_active?: false, find_build_in_track: {status: "completed"})
+
+      store_submission.fully_release_previous_production_rollout!
+
+      expect(prev_rollout.reload.status).not_to eq("fully_released")
+    end
+
+    it "completes the previous rollout" do
+      prev_rollout = create_production_rollout_tree(train, release_platform).dig(:store_rollout)
+      create_production_rollout_tree(
+        train,
+        release_platform,
+        release_traits: [:on_track],
+        rollout_status: :started,
+        skip_rollout: true
+      ) => { store_submission: }
+      allow(providable_dbl).to receive_messages(build_active?: true, rollout_release: GitHub::Result.new)
+
+      store_submission.fully_release_previous_production_rollout!
+
+      expect(prev_rollout.reload.status).to eq("fully_released")
+    end
+  end
+
+  describe "#attach_build" do
+    let(:build) { create(:build) }
+    let(:production_release) { create(:production_release, :inflight, build:) }
+    let(:submission) { create(:play_store_submission, :created, build:, parent_release: production_release) }
+
+    it "attaches the new build to the submission" do
+      new_build = create(:build)
+      submission.attach_build(new_build)
+      expect(submission.reload.build).to eq(new_build)
+    end
+
+    (described_class::STATES.values - described_class::CHANGEABLE_STATES).each do |state|
+      it "does not change the build if the submission is in #{state} state" do
+        submission.update!(status: state)
+        new_build = create(:build)
+        submission.attach_build(new_build)
+        expect(submission.reload.build).to eq(build)
+      end
+    end
+  end
+
+  describe "#auto_start_rollout?" do
+    let(:build) { create(:build) }
+
+    context "when parent release is production" do
+      let(:production_release) { create(:production_release, :inflight, build:) }
+      let(:submission) {
+        create(:play_store_submission,
+          :created,
+          build:,
+          parent_release: production_release,
+          release_platform_run: production_release.release_platform_run)
+      }
+
+      it "returns false when auto_start_rollout_after_submission is not set" do
+        expect(submission.auto_start_rollout?).to be(false)
+      end
+
+      it "returns true when auto_start_rollout_after_submission is enabled" do
+        submission.config["rollout_config"]["auto_start_after_submission"] = true
+        expect(submission.auto_start_rollout?).to be(true)
+      end
+
+      it "returns false when auto_start_rollout_after_submission is disabled" do
+        submission.config["rollout_config"]["auto_start_after_submission"] = false
+        expect(submission.auto_start_rollout?).to be(false)
+      end
+    end
+
+    it "returns true when parent release is not production" do
+      pre_prod_release = create(:beta_release)
+      submission = create(:play_store_submission, :created, build:, parent_release: pre_prod_release)
+
+      expect(submission.auto_start_rollout?).to be(true)
+    end
+  end
+
+  describe "#should_fail_on_rollout_start_failure?" do
+    let(:build) { create(:build) }
+
+    context "when parent release is production" do
+      let(:production_release) { create(:production_release, :inflight, build:) }
+      let(:submission) {
+        create(:play_store_submission,
+          :created,
+          build:,
+          parent_release: production_release,
+          release_platform_run: production_release.release_platform_run)
+      }
+
+      it "returns false for production releases" do
+        expect(submission.should_fail_on_rollout_start_failure?).to be(false)
+      end
+    end
+
+    context "when parent release is not production" do
+      let(:pre_prod_release) { create(:beta_release) }
+      let(:submission) { create(:play_store_submission, :created, build:, parent_release: pre_prod_release) }
+
+      it "returns true for pre-prod releases" do
+        expect(submission.should_fail_on_rollout_start_failure?).to be(true)
+      end
+    end
+  end
+end

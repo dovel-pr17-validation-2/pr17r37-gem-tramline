@@ -1,0 +1,10 @@
+<%= render StatCardComponent.new(name, size:, external_url:, external_url_title: "Go to dashboard") do |stat| %>
+  <% stat.with_icon(helpers.integration_logo(provider), size: :md, rounded: false) %>
+
+  <div class="flex flex-row justify-between items-end">
+    <div class="text-base"><%= current %>%</div>
+    <div class="text-xs text-secondary-50"><%= subtitle %></div>
+  </div>
+
+  <%= render ProgressBarComponent.new(percent: current, label: false) %>
+<% end %>

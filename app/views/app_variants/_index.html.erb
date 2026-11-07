@@ -1,0 +1,36 @@
+<% subtitle = "Akin to product flavors or build variants, with an explicit requirement of having a different bundle id and separate integrations." %>
+<%= render SectionComponent.new(style: :titled, title: "App Variants", subtitle: subtitle) do |section| %>
+  <% section.with_sidenote do %>
+    <%= render ModalComponent.new(title: "Add a new App Variant") do |modal| %>
+      <% modal.with_button(label: "Add", scheme: :light, type: :action, size: :xxs, arrow: :none)
+           .with_icon("plus.svg", size: :sm) %>
+
+      <% modal.with_body do %>
+        <%= render partial: "create", locals: {app: @app, app_variant: @new_app_variant} %>
+      <% end %>
+    <% end %>
+  <% end %>
+
+  <% if @none %>
+    <div class="text-secondary text-sm">
+      <%= render EmptyStateComponent.new(title: "Add new to begin",
+                                         text: "No app variants have been configured yet.",
+                                         banner_image: "dna.svg",
+                                         type: :subdued) %>
+    </div>
+  <% else %>
+    <% if @variants_needing_setup.any? %>
+      <div class="mb-6">
+        <%= render AlertComponent.new(kind: :announcement, type: :announce, title: t("integrations.app_variant.requires_configuration_banner_title")) do %>
+          <span class="text-sm"><%= t("integrations.app_variant.requires_configuration_banner_body") %></span>
+        <% end %>
+      </div>
+    <% end %>
+
+    <div class="flex flex-col gap-6">
+      <% @app_variants.each do |variant| %>
+        <%= render partial: "app_variants/variant_card", locals: {app: @app, variant: variant} %>
+      <% end %>
+    </div>
+  <% end %>
+<% end %>

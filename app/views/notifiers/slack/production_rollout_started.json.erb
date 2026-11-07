@@ -1,0 +1,50 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "<%= staged_rollout_started_text %>"
+      }
+    }
+    <% unless @requires_review %>,
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<%= requires_review_text %>"
+        }
+      ]
+    }
+    <% end %>,
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "<%= changelog_header %>"
+      }
+    },
+    {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_list",
+          "style": "bullet",
+          "elements": [<%= changelog_elements(@changelog[:first_part]) %>]
+        }
+      ]
+    }
+    <% if @changelog[:total_parts] > 1 %>,
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "Changes in release, continued in thread :thread:"
+        }
+      ]
+    }
+    <% end %>
+  ]
+}

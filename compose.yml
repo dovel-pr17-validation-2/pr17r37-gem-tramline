@@ -1,0 +1,165 @@
+x-app: &app
+  build:
+    dockerfile: ./dev.Dockerfile
+    context: .
+    args:
+      RUBY_VERSION: '3.4.9'
+      PG_MAJOR: '14'
+  image: tramline-site-dev:1.0.0
+  environment: &env
+    RAILS_ENV: ${RAILS_ENV:-development}
+  tmpfs:
+    - /tmp
+    - /app/tmp/pids
+    - /rails/tmp/pids
+
+x-backend: &backend
+  <<: *app
+  stdin_open: true
+  tty: true
+  volumes:
+    - .:/rails:cached
+    - bundle:/usr/local/bundle
+    - rails_cache:/app/tmp/cache
+  environment:
+    <<: *env
+    DATABASE_URL: postgres://postgres:postgres@host.docker.internal:5442
+    REDIS_URL: redis://host.docker.internal:6389
+    BOOTSNAP_CACHE_DIR: /usr/local/bundle/_bootsnap
+    XDG_DATA_HOME: /app/tmp/caches
+    EDITOR: vim
+    TERM: xterm-256color
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    setup:
+      condition: service_completed_successfully
+    localtunnel:
+      condition: service_healthy
+
+services:
+  pre-setup:
+    <<: *app
+    volumes:
+      - .:/rails:cached
+      - bundle:/usr/local/bundle
+      - rails_cache:/app/tmp/cache
+    command: [ "/bin/bash", "/rails/bin/setup.creds", "-e", "dev" ]
+    stdin_open: true
+    tty: true
+    profiles:
+      - pre-setup
+
+  setup:
+    <<: *backend
+    command: [ "/bin/bash", "/rails/bin/setup.docker.dev" ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  localtunnel:
+    image: alpine:latest
+    env_file: .env.development
+    environment:
+      - WEB_PORT=${WEB_PORT:-3000}
+    volumes:
+      - .:/rails
+    command: /bin/sh /rails/bin/localtunnel
+    network_mode: host
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /tmp/localtunnel_ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  web:
+    <<: *backend
+    command: bundle exec rails server -p 3000 -b 'ssl://0.0.0.0:3000?key=config/certs/localhost-key.pem&cert=config/certs/localhost.pem'
+    ports:
+      - '3000:3000'
+    healthcheck:
+      test: [ "CMD", "curl", "-k", "-f", "https://localhost:3000/up" ]
+      interval: 60s
+      timeout: 1s
+      retries: 2
+      start_period: 3s
+
+  css:
+    <<: *backend
+    command: bundle exec rails tailwindcss:watch
+    depends_on:
+      web:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command: bundle exec sidekiq -C config/sidekiq.yml
+
+  postgres:
+    image: postgres:14
+    volumes:
+      - .psqlrc:/root/.psqlrc:ro
+      - postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5442:5432'
+    healthcheck:
+      test: pg_isready -U postgres -h 127.0.0.1
+      interval: 60s
+      timeout: 1s
+      retries: 2
+      start_period: 3s
+
+  redis:
+    image: redis:6.2-alpine
+    volumes:
+      - redis:/data
+    ports:
+      - '6389:6379'
+    healthcheck:
+      test: redis-cli ping
+      interval: 60s
+      timeout: 1s
+      retries: 2
+      start_period: 3s
+
+  spec:
+    <<: *backend
+    command: bash -c "RAILS_ENV=test bin/rails db:create || true"
+    environment:
+      <<: *env
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@host.docker.internal:5442/tramline_site_test
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  applelink:
+    build:
+      dockerfile: ../applelink/dev.Dockerfile
+      context: ../applelink
+      args:
+        RUBY_VERSION: '3.2.0'
+    image: applelink-dev:1.0.0
+    command: bundle exec guard --no-bundler-warning --no-interactions
+    ports:
+      - '4000:4000'
+    volumes:
+      - ../applelink:/applelink:cached
+
+volumes:
+  bundle:
+  rails_cache:
+  postgres:
+  redis:

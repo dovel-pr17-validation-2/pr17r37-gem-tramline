@@ -1,0 +1,184 @@
+# == Schema Information
+#
+# Table name: store_rollouts
+#
+#  id                               :uuid             not null, primary key
+#  automatic_rollout                :boolean          default(FALSE), not null, indexed
+#  automatic_rollout_next_update_at :datetime
+#  automatic_rollout_updated_at     :datetime
+#  completed_at                     :datetime
+#  config                           :decimal(8, 5)    default([]), not null, is an Array
+#  current_stage                    :integer
+#  is_staged_rollout                :boolean          default(FALSE), indexed
+#  status                           :string           not null, indexed
+#  type                             :string           not null
+#  created_at                       :datetime         not null
+#  updated_at                       :datetime         not null
+#  release_platform_run_id          :uuid             not null, indexed
+#  store_submission_id              :uuid             indexed
+#
+class StoreRollout < ApplicationRecord
+  has_paper_trail
+  using RefinedString
+  using RefinedFloat
+  include AASM
+  include Loggable
+  include Displayable
+  # include Sandboxable
+
+  belongs_to :store_submission
+  belongs_to :release_platform_run
+
+  delegate :train, to: :release_platform_run
+  delegate :notify!, to: :train
+
+  STATES = {
+    created: "created",
+    started: "started",
+    paused: "paused",
+    completed: "completed",
+    halted: "halted",
+    fully_released: "fully_released"
+  }
+
+  enum :status, STATES
+
+  delegate :parent_release, :build, :external_link, to: :store_submission
+  delegate :release_version, :build_number, to: :build
+  delegate :train, :platform, to: :release_platform_run
+  delegate :notify!, to: :train
+  delegate :stale?, :actionable?, to: :parent_release
+
+  scope :production, -> { joins(store_submission: :production_release) }
+  scope :automatic_rollouts, -> { where(status: [:started], is_staged_rollout: true, automatic_rollout: true) }
+
+  def staged_rollout? = is_staged_rollout
+
+  def errors? = errors.any?
+
+  def provider = release_platform_run.store_provider
+
+  def finished? = completed? || fully_released?
+
+  def reached_last_stage? = next_rollout_percentage.nil?
+
+  def disable_automatic_rollout!
+    # no-op
+  end
+
+  def release_info
+    {
+      build_version: release_version,
+      build_number:,
+      updated_at:,
+      platform:,
+      rollout_percentage: last_rollout_percentage_fmt
+    }
+  end
+
+  def stage
+    (current_stage || 0).succ
+  end
+
+  def next_rollout_percentage
+    config[next_stage]
+  end
+
+  def last_rollout_percentage
+    return Release::FULL_ROLLOUT_VALUE if finished? && !staged_rollout?
+    return Release::FULL_ROLLOUT_VALUE if fully_released?
+    return 0 if created? || current_stage.nil?
+    return config.last if reached_last_stage?
+    config[current_stage]
+  end
+
+  def last_rollout_percentage_fmt
+    perc = last_rollout_percentage
+    fmt = (perc % 1 == 0) ? "%.0f" : "%.02f"
+    fmt % perc
+  end
+
+  def latest_events(n = nil)
+    passports.order(created_at: :desc).limit(n)
+  end
+
+  def notification_params
+    store_submission.notification_params.merge(stamp_data)
+  end
+
+  def rollout_percentage_at(day)
+    last_event = passports
+      .where(reason: [:started, :updated, :completed, :fully_released])
+      .where("DATE_TRUNC('day', event_timestamp) <= ?", day)
+      .order(:event_timestamp)
+      .last
+    return 0.0 unless last_event
+    return 100.0 if last_event.reason == "fully_released"
+    last_event.metadata["rollout_percentage"].safe_float
+  end
+
+  def hundred_percent?
+    return false if current_stage.nil?
+    last_rollout_percentage.to_f.equal_to?(100.0)
+  end
+
+  def update_stage(stage, finish_rollout: false)
+    # do nothing if the new stage is the same as current and the rollout has not finished
+    return if stage == current_stage && !finish_rollout
+
+    # update the stage
+    update!(current_stage: stage)
+
+    # complete the release if the rollout has finished and we've reached the last stage
+    return complete! if finish_rollout && reached_last_stage?
+
+    # otherwise
+    if may_start?
+      # start the rollout and stamp (if it can be started)
+      start!
+      event_stamp!(reason: :started, kind: :success, data: stamp_data)
+    else
+      # notify that the rollout has updated
+      event_stamp!(reason: :updated, kind: :success, data: stamp_data)
+      notify!("Rollout has been updated", :production_rollout_updated, notification_params)
+    end
+  end
+
+  protected
+
+  def next_stage
+    current_stage.blank? ? 0 : current_stage.succ
+  end
+
+  def stamp_data
+    {
+      current_stage: stage,
+      version: release_version,
+      build_number: build_number,
+      rollout_percentage: last_rollout_percentage_fmt
+    }
+  end
+
+  def on_start!
+    parent_release.rollout_started!
+  end
+
+  def on_resume!
+    event_stamp!(reason: :resumed, kind: :notice, data: stamp_data)
+    notify!("Rollout has been resumed", :production_rollout_resumed, notification_params)
+  end
+
+  def on_pause!
+    event_stamp!(reason: :paused, kind: :notice, data: stamp_data)
+    notify!("Rollout has been paused", :production_rollout_paused, notification_params)
+  end
+
+  def on_complete!
+    event_stamp!(reason: :completed, kind: :success, data: stamp_data)
+    parent_release.rollout_complete!(store_submission)
+  end
+
+  def set_completed_at!
+    update! completed_at: Time.current
+  end
+end

@@ -1,0 +1,116 @@
+<div class="flex flex-col item-gap-default">
+  <% if cascading_rollout_notice? %>
+    <%= render AlertComponent.new(type: :info, title: CASCADING_ROLLOUTS_NOTICE, full_screen: false) %>
+  <% end %>
+
+  <%= render partial: "shared/play_store_review_rejected", locals: {show: show_blocked_message?, build:, actionable: false} %>
+
+  <div class="flex flex-col section-gap-default">
+    <%= render CardComponent.new(title: @title, separator: false, fixed_height: card_height, border_style:) do |card| %>
+      <% card.with_action do %>
+        <%= render ModalComponent.new(title: "Rollout timeline",
+                                      size: :xs,
+                                      type: :drawer,
+                                      authz: false) do |modal| %>
+          <% button = modal.with_button(scheme: :supporting,
+                                        size: :xxs,
+                                        type: :action,
+                                        label: "Timeline") %>
+          <% button.with_icon("activity.svg", size: :base) %>
+          <% button.with_tooltip("See recent rollout activity", placement: "top") %>
+          <% modal.with_body do %>
+            <div class="pl-3">
+              <%= render TimelineComponent.new(events:, view_all_link: timeline_release_path(release)) %>
+            </div>
+          <% end %>
+        <% end %>
+      <% end %>
+
+      <% if action.present? %>
+        <% card.with_action do %>
+          <%= render action %>
+        <% end %>
+      <% end %>
+
+      <div class="flex flex-col justify-between gap-1 h-full">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-4">
+          <div class="col-span-1 md:col-span-5 flex flex-col gap-2">
+            <div class="flex flex-row items-center">
+              <%= render LiveRelease::BuildComponent.new(
+                    build,
+                show_metadata: false,
+                show_ci: false,
+                show_activity: false,
+                show_commit: false,
+                show_compact_metadata: true
+                  ) %>
+              <%= render partial: "shared/tag_link", locals: {taggable: parent_release} %>
+            </div>
+
+            <div class="flex items-baseline gap-2">
+              <% if form_factor.present? %>
+                <%= render BadgeComponent.new(text: form_factor[:text], kind: :badge) do |badge| %>
+                  <% badge.with_icon(form_factor[:icon], size: :xxl) %>
+                <% end %>
+              <% end %>
+              <%= render IconComponent.new(helpers.integration_logo(provider), size: :xl) %>
+              <div class="text-2xl md:text-3xl font-bold"><%= last_rollout_percentage %>%</div>
+              <div class="text-sm text-secondary-50">of users</div>
+            </div>
+
+            <div class="flex gap-1 flex-wrap">
+              <%= render(rollout_type_badge) %>
+              <%= render BadgeComponent.new(**decorated_status) %>
+              <div class="text-sm text-secondary-50"><%= stage_help %></div>
+            </div>
+
+            <div class="flex flex-wrap gap-y-2 text-secondary text-sm">
+              <p>
+                <%= action_help %>
+                <%= next_rollout_time %>
+              </p>
+            </div>
+          </div>
+
+          <div class="col-span-1 md:col-span-7 justify-self-start md:justify-self-end self-end flex flex-col gap-2">
+            <% stages.each_with_index do |(percent, st), _idx| %>
+              <div class="flex flex-row justify-between gap-1 items-center flex-initial flex-wrap">
+                <%= render ProgressBarComponent.new(percent: percent, label: true, status: st) %>
+                <% if st == :default %>
+                  <%= render IconComponent.new("check.svg", size: :sm, classes: "text-green-600") %>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <% unless created? %>
+          <%= render SectionComponent.new(title: "More actions", style: :titled, size: :micro) do %>
+            <div class="flex flex-col justify-between items-center gap-2 md:flex-row">
+              <div class="flex flex-wrap flex-row gap-2">
+                <% more_actions.each do |action| %>
+                  <%= render action %>
+                <% end %>
+              </div>
+              <div class="flex flex-row gap-2">
+                <%= render ButtonComponent.new(label: "Store dashboard ↗",
+                                               scheme: :link,
+                                               type: :link_external,
+                                               options: external_link,
+                                               html_options: {class: "text-sm"},
+                                               authz: false,
+                                               size: :none) do |b|
+                      b.with_icon(store_icon, size: :md)
+                    end %>
+              </div>
+            </div>
+          <% end %>
+        <% end %>
+      </div>
+    <% end %>
+
+    <% if !created? && show_monitoring? %>
+      <%= render ReleaseMonitoringComponent.new(store_rollout:, size: monitoring_size) %>
+    <% end %>
+  </div>
+</div>

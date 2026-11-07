@@ -1,0 +1,515 @@
+module Installations
+  require "down/http"
+
+  class Github::Api
+    include Vaultable
+    include Loggable
+    attr_reader :app_name, :installation_id, :jwt, :client
+
+    WEBHOOK_NAME = "web"
+    WEBHOOK_EVENTS = %w[push pull_request]
+    LIST_WORKFLOWS_LIMIT = 99
+    RERUN_FAILED_JOBS_URL = Addressable::Template.new "https://api.github.com/repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs"
+    WORKFLOW_DISPATCH_URL = Addressable::Template.new "https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    GENERATE_RELEASE_NOTES_URL = Addressable::Template.new "https://api.github.com/repos/{repo}/releases/generate-notes"
+
+    def initialize(installation_id)
+      @app_name = creds.integrations.github.app_name
+      @installation_id = installation_id
+      @jwt = Installations::Github::Jwt.new(creds.integrations.github.app_id)
+
+      set_client
+    end
+
+    def self.find_biggest(artifacts)
+      artifacts.max_by { |artifact| artifact["size_in_bytes"] }
+    end
+
+    def self.filter_by_name(artifacts, name_pattern)
+      return artifacts if name_pattern.blank?
+      artifacts.filter { |artifact| artifact["name"].downcase.include? name_pattern }.presence || artifacts
+    end
+
+    def get_installation(id, transforms)
+      execute do
+        Octokit::Client.new(bearer_token: jwt.get)
+          .installation(id)
+          .then { |responses| Installations::Response::Keys.transform([responses], transforms) }
+          .first
+      end
+    end
+
+    def list_workflows(repo, transforms)
+      execute do
+        @client
+          .workflows(repo, {per_page: LIST_WORKFLOWS_LIMIT})
+          .then { |response| response[:workflows] }
+          .then { |workflows| workflows.select { |workflow| workflow[:state] == "active" } }
+          .then { |responses| Installations::Response::Keys.transform(responses, transforms) }
+      end
+    end
+
+    def get_workflow_run(repo, run_id)
+      execute do
+        @client
+          .workflow_run(repo, run_id)
+          .then { |run| run.to_h.presence || raise(Installations::Error.new("Could not find the workflow run", reason: :workflow_run_not_found)) }
+      end
+    end
+
+    def list_repos(transforms)
+      execute do
+        @client
+          .list_app_installation_repositories
+          .then { |response| response[:repositories] }
+          .then { |responses| Installations::Response::Keys.transform(responses, transforms) }
+      end
+    end
+
+    # Disabling the Octokit version, since GH is now sending 200 as success status message instead of 204,
+    # in which the library fails to interpret it as success.
+    #
+    # What the library is doing is technically correct as per the docs: https://docs.github.com/en/rest/actions/workflows?apiVersion=2022-11-28#create-a-workflow-dispatch-event
+    # This custom execute will work even if they realize this mistake and revert back to 204.
+    def run_workflow!(repo, id, ref, inputs, commit_hash)
+      inputs =
+        inputs
+          .slice(:version_code, :build_notes)
+          .merge(version_name: inputs[:build_version], commit_ref: commit_hash)
+          .compact
+          .to_json
+          .then { {"tramline-input" => _1} }
+          .merge(inputs[:parameters])
+
+      params = {
+        json: {
+          inputs: inputs,
+          ref: ref,
+          return_run_details: true
+        }
+      }
+
+      # With return_run_details, GitHub API returns 200 OK with workflow_run_id
+      # instead of the default 204 No Content with empty body
+      begin
+        response_body = execute_custom do |custom_client|
+          custom_client.post(
+            WORKFLOW_DISPATCH_URL
+              .expand(repo: repo, workflow_id: id)
+              .to_s
+              .then { |url| URI.decode_www_form_component(url) },
+            params
+          )
+        end
+
+        # Parse JSON response and extract workflow_run_id
+        response_data = JSON.parse(response_body.to_s)
+        workflow_run_id = response_data["workflow_run_id"]
+
+        raise(Installations::Error.new("Workflow run ID not returned", reason: :workflow_run_id_missing)) if workflow_run_id.blank?
+
+        workflow_run_id
+      rescue JSON::ParserError
+        raise(Installations::Error.new("Invalid response from GitHub API", reason: :invalid_response))
+      rescue Installations::Error
+        raise
+      rescue
+        raise(Installations::Error.new("Could not trigger the workflow", reason: :workflow_trigger_failed))
+      end
+    end
+
+    def cancel_workflow!(repo, run_id)
+      execute do
+        @client.cancel_workflow_run(repo, run_id)
+      end
+    end
+
+    def retry_workflow!(repo, run_id)
+      execute_custom do |custom_client|
+        custom_client.post(
+          RERUN_FAILED_JOBS_URL
+            .expand(repo:, run_id:)
+            .to_s
+            .then { |url| URI.decode_www_form_component(url) },
+          {}
+        )
+      end
+    end
+
+    def create_repo_webhook!(repo, url, transforms)
+      execute do
+        @client.create_hook(
+          repo,
+          WEBHOOK_NAME,
+          {
+            url:,
+            content_type: "json"
+          },
+          {
+            events: WEBHOOK_EVENTS,
+            active: true
+          }
+        ).then { |response| Installations::Response::Keys.transform([response], transforms) }.first
+      end
+    end
+
+    def update_repo_webhook!(repo, id, url, transforms)
+      execute do
+        @client.edit_hook(
+          repo,
+          id,
+          WEBHOOK_NAME,
+          {
+            url:,
+            content_type: "json"
+          },
+          {
+            events: WEBHOOK_EVENTS,
+            active: true
+          }
+        ).then { |response| Installations::Response::Keys.transform([response], transforms) }.first
+      end
+    end
+
+    def find_webhook(repo, id, transforms)
+      execute do
+        @client
+          .hook(repo, id)
+          .then { |response| Installations::Response::Keys.transform([response], transforms) }
+          .first
+      end
+    end
+
+    def create_branch!(repo, source_name, new_branch_name, source_type: :branch)
+      execute do
+        sha =
+          case source_type
+          when :branch
+            head(repo, source_name)
+          when :commit
+            source_name
+          when :tag
+            @client.ref(repo, "tags/#{source_name}")[:object][:sha]
+          else
+            raise ArgumentError, "source can only be a branch, tag or commit"
+          end
+
+        @client.create_ref(repo, "heads/#{new_branch_name}", sha)
+      end
+    end
+
+    def create_tag!(repo, name, sha)
+      execute do
+        @client.create_ref(repo, "refs/tags/#{name}", sha)
+      end
+    end
+
+    # creates a lightweight tag and a GitHub release simultaneously
+    def create_release!(repo, tag_name, branch_name, previous_tag_name, release_notes = nil)
+      generated_release_notes = generate_release_notes(repo, tag_name, previous_tag_name, branch_name)
+      options = {
+        target_commitish: branch_name,
+        name: tag_name,
+        body: generated_release_notes.presence || release_notes.presence,
+        generate_release_notes: false
+      }.compact
+      execute do
+        raise Installations::Error.new("Should not create a tag", reason: :tag_reference_already_exists) if tag_exists?(repo, tag_name)
+        @client.create_release(repo, tag_name, options)
+      end
+    end
+
+    def tag_exists?(repo, tag_name)
+      execute do
+        # NOTE: The API returns a list of matching tags if the exact match doesn't exist
+        # It returns a single element if there is an exact match
+        !@client.ref(repo, "tags/#{tag_name}").is_a?(Array)
+      end
+    rescue Installations::Github::Error => e
+      raise e if e.reason != :not_found
+      false
+    end
+
+    def branch_exists?(repo, branch_name)
+      execute do
+        @client.branch(repo, branch_name).present?
+      end
+    end
+
+    def create_pr!(repo, to, from, title, body, transforms)
+      raise Installations::Error.new("Should not create a Pull Request without a diff", reason: :pull_request_without_commits) unless diff?(repo, to, from)
+
+      execute do
+        @client
+          .create_pull_request(repo, to, from, title, body)
+          .then { |response| Installations::Response::Keys.transform([response], transforms) }
+          .first
+      end
+    end
+
+    def find_pr(repo, to, from, transforms)
+      execute do
+        @client
+          .pull_requests(repo, {head: from, base: to})
+          .then { |response| Installations::Response::Keys.transform(response, transforms) }
+          .first
+      end
+    end
+
+    def get_pr(repo, pr_number, transforms)
+      execute do
+        @client
+          .pull_request(repo, pr_number)
+          .then { |response| Installations::Response::Keys.transform([response], transforms) }
+          .first
+      end
+    end
+
+    def merge_pr!(repo, pr_number, transforms)
+      execute do
+        @client
+          .merge_pull_request(repo, pr_number)
+          .then { get_pr(repo, pr_number, transforms) }
+      end
+    end
+
+    def commits_between(repo, from_branch, to_branch, transforms)
+      execute do
+        @client
+          .compare(repo, from_branch, to_branch)
+          .dig(:commits)
+          .then { |commits| Installations::Response::Keys.transform(commits, transforms) }
+      end
+    end
+
+    def diff?(repo, from_branch, to_branch)
+      execute do
+        @client
+          .compare(repo, from_branch, to_branch)
+          .dig(:files)
+          .present?
+      end
+    end
+
+    def head(repo, working_branch_name, sha_only: true, commit_transforms: nil)
+      raise ArgumentError, "transforms must be supplied when querying head object" if !sha_only && !commit_transforms
+
+      execute do
+        obj = @client.ref(repo, "heads/#{working_branch_name}")[:object]
+        if obj[:type].eql? "commit"
+          return obj[:sha] if sha_only
+          return get_commit(repo, obj[:sha], commit_transforms)
+        end
+      end
+    end
+
+    def get_commit(repo, sha, commit_transforms)
+      @client.commit(repo, sha).then { |commit| Installations::Response::Keys.transform([commit], commit_transforms) }.first
+    end
+
+    def assign_pr(repo, pr_number, login)
+      execute do
+        @client.add_assignees(repo, pr_number, [login])
+      end
+    end
+
+    def cherry_pick_pr(repo, branch, sha, patch_branch_name, patch_pr_title, patch_pr_description, transforms)
+      # get_head_commit on working branch -- 1 api call
+      # get commit we need to cherry pick - 1 api call
+      # create a temp commit with correct tree and parent - 1 api call
+      # create a patch branch on that commit - 1 api call
+      # create cherry picked commit - 1 api call
+      # force update ref of patch branch - 1 api call
+      # create a PR - 1 api call
+      # TOTAL - 7 api calls
+      #
+      execute do
+        branch_head = @client.branch(repo, branch)[:commit]
+        branch_tree_sha = branch_head[:commit][:tree][:sha]
+        commit_to_pick = @client.commit(repo, sha)
+        commit_to_pick_sha = commit_to_pick[:parents]&.last&.dig(:sha)
+        commit_to_pick_msg = commit_to_pick.dig(:commit, :message)
+        commit_to_pick_login = commit_to_pick.dig(:author, :login)
+        cherry_commit_authors = commit_to_pick.dig(:commit).to_h.slice(:author, :committer)
+
+        temp_commit_message = "Temporary Commit by Tramline"
+        temp_commit_sha = @client.create_commit(repo, temp_commit_message, branch_tree_sha, commit_to_pick_sha)[:sha]
+        @client.create_ref(repo, "heads/#{patch_branch_name}", temp_commit_sha)
+
+        merge_tree = @client.merge(repo, patch_branch_name, sha).dig(:commit, :tree, :sha)
+        cherry_commit = @client.create_commit(repo, commit_to_pick_msg, merge_tree, branch_head[:sha], cherry_commit_authors)[:sha]
+        @client.update_ref(repo, "heads/#{patch_branch_name}", cherry_commit, true)
+
+        pr = @client
+          .create_pull_request(repo, branch, patch_branch_name, patch_pr_title, patch_pr_description)
+          .then { |response| Installations::Response::Keys.transform([response], transforms) }
+          .first
+
+        begin
+          assign_pr(repo, pr[:number], commit_to_pick_login)
+        rescue => e
+          elog(e, level: :warn)
+        end
+
+        pr
+      end
+    rescue Installations::Error => e
+      @client.delete_branch(repo, patch_branch_name) if e.reason == :merge_conflict
+      raise e
+    end
+
+    def enable_auto_merge(owner, repo, pr_number)
+      find_pr_id_query = <<-GRAPHQL
+        query {
+          repository(owner: "#{owner}", name: "#{repo}") {
+            pullRequest(number: #{pr_number}) {
+              id
+            }
+          }
+        }
+      GRAPHQL
+
+      response = client.post "/graphql", {query: find_pr_id_query}.to_json
+      pull_request_id = response.dig(:data, :repository, :pullRequest, :id)
+      raise Installations::Error.new("Could not find the Pull Request", reason: :not_found) unless pull_request_id
+
+      enable_auto_merge = <<-GRAPHQL
+        mutation {
+          enablePullRequestAutoMerge(input: {pullRequestId: "#{pull_request_id}"}) {
+            pullRequest {
+              id
+            }
+          }
+        }
+      GRAPHQL
+
+      client.post "/graphql", {query: enable_auto_merge}.to_json
+    end
+
+    def artifact_download_url(artifact)
+      HTTP
+        .auth("Bearer #{@client.access_token}")
+        .get(artifact["archive_download_url"])
+        .then { |resp| resp.headers["Location"] }
+    end
+
+    def artifact_io_stream(url)
+      # FIXME: return an IO stream instead of a TempFile
+      # See issue: https://github.com/janko/down/issues/70
+      Down::Http.download(url)
+    end
+
+    def artifacts(artifacts_url, transforms)
+      HTTP
+        .auth("Bearer #{@client.access_token}")
+        .get(artifacts_url)
+        .then { |resp| JSON.parse(resp.to_s) }
+        .then { |parsed_resp| Installations::Response::Keys.transform(parsed_resp["artifacts"], transforms) }
+    end
+
+    def get_file_content(repo, branch, path)
+      execute do
+        response = @client.contents(repo, path: path, ref: branch)
+
+        # ignore directories
+        if response.is_a?(Array)
+          raise Installations::Error.new("Could not get file contents", reason: :not_found)
+        end
+
+        # ignore symlinks, submodules, large files, etc.
+        if response.type == "file" && response.encoding == "base64"
+          Base64.decode64(response.content)
+        else
+          raise Installations::Error.new("Could not get file contents", reason: :not_found)
+        end
+      end
+    end
+
+    def update_file!(repo, branch, path, content, message, author_name: nil, author_email: nil)
+      execute do
+        # first, get the current file to get its blob SHA
+        current_file = @client.contents(repo, path: path, ref: branch)
+
+        commit_info = {
+          message: message,
+          content: Base64.strict_encode64(content),
+          sha: current_file.sha,
+          branch: branch
+        }
+
+        if author_name && author_email
+          commit_info[:author] = {name: author_name, email: author_email}
+          commit_info[:committer] = {name: author_name, email: author_email}
+        end
+
+        @client.update_contents(repo, path, message, current_file.sha, content, branch: branch)
+      end
+    end
+
+    private
+
+    def generate_release_notes(repo, tag_name, previous_tag_name, branch)
+      params = {
+        json: {
+          tag_name:,
+          previous_tag_name:,
+          target_commitish: branch
+        }
+      }
+      resp_body = execute_custom do |custom_client|
+        custom_client.post(
+          GENERATE_RELEASE_NOTES_URL
+            .expand(repo:)
+            .to_s
+            .then { |url| URI.decode_www_form_component(url) },
+          params
+        )
+      end
+      JSON.parse(resp_body).dig("body")
+    rescue => e
+      elog(e, level: :warn)
+      nil
+    end
+
+    def execute
+      yield
+    rescue Octokit::Unauthorized
+      set_client
+      retry
+    rescue Octokit::NotFound, Octokit::UnprocessableEntity, Octokit::MethodNotAllowed, Octokit::Conflict => e
+      raise Installations::Github::Error.new(e)
+    end
+
+    API_VERSION = "2022-11-28"
+    ACCEPT_HEADER = "application/vnd.github+json"
+
+    def execute_custom
+      execute do
+        token = @client.access_token
+        new_client = HTTP.auth("Bearer #{token}").headers(:accept => ACCEPT_HEADER, "X-GitHub-Api-Version" => API_VERSION)
+
+        response = yield(new_client)
+
+        response_headers = response.headers.to_h.with_indifferent_access
+        response_params = {
+          status: response.status,
+          body: response.body,
+          response_headers: response_headers
+        }
+
+        if (error = Octokit::Error.from_response(response_params))
+          raise error
+        end
+
+        Rails.logger.info "GitHub API (execute_custom): #{response_headers}"
+        response_params[:body]
+      end
+    end
+
+    def set_client
+      client = Octokit::Client.new(bearer_token: jwt.get)
+      installation_token = client.create_app_installation_access_token(installation_id)[:token]
+      @client ||= Octokit::Client.new(access_token: installation_token)
+    end
+  end
+end

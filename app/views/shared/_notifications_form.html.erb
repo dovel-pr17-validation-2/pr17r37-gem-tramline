@@ -1,0 +1,9 @@
+<div>
+  <%= form.labeled_select field_name, field_title,
+        options_for_select(
+          display_channels(channels) { |chan| "#" + chan[:name] },
+          current
+        ),
+        {},
+        {multiple:, data: {controller: "input-select"}} %>
+</div>

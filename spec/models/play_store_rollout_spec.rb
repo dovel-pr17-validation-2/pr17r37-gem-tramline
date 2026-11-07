@@ -1,0 +1,525 @@
+# frozen_string_literal: true
+
+require "rails_helper"
+
+describe PlayStoreRollout do
+  describe "#start_release!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+    let(:rollout) { create(:store_rollout, :play_store, :created, release_platform_run:, store_submission:) }
+    let(:prod_double) { instance_double(ProductionRelease) }
+
+    before do
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(prod_double).to receive(:rollout_started!)
+      allow(prod_double).to receive(:rollout_complete!)
+      allow(rollout).to receive_messages(provider: providable_dbl, parent_release: prod_double)
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "starts the production release" do
+      rollout.start_release!
+      expect(rollout.started?).to be(true)
+    end
+
+    it "updates the current stage if the rollout is staged" do
+      rollout.start_release!
+      expect(rollout.current_stage).to eq(0)
+    end
+
+    it "informs the production release" do
+      rollout.start_release!
+      expect(prod_double).to have_received(:rollout_started!)
+    end
+
+    context "when automatic rollout is enabled" do
+      let(:rollout) { create(:store_rollout, :play_store, :created, release_platform_run:, store_submission:, automatic_rollout: true) }
+
+      it "schedules the next automatic rollout job" do
+        freeze_time do
+          expect {
+            rollout.start_release!
+          }.to change(AutomaticUpdateRolloutJob.jobs, :size).by(1)
+          expect(rollout.reload.automatic_rollout_updated_at).to eq(Time.current)
+          expect(rollout.automatic_rollout_next_update_at).to eq(PlayStoreRollout::AUTO_ROLLOUT_RUN_INTERVAL.from_now)
+        end
+      end
+    end
+
+    context "when automatic rollout is disabled" do
+      let(:rollout) { create(:store_rollout, :play_store, :created, release_platform_run:, store_submission:, automatic_rollout: false) }
+
+      it "does not schedule the automatic rollout job" do
+        expect {
+          rollout.start_release!
+        }.not_to change(AutomaticUpdateRolloutJob.jobs, :size)
+      end
+    end
+
+    context "when the rollout is not staged" do
+      let(:rollout) { create(:store_rollout, :play_store, :created, release_platform_run:, store_submission:, is_staged_rollout: false) }
+
+      it "completes the rollout if not staged" do
+        rollout.start_release!
+        expect(rollout.completed?).to be(true)
+        expect(prod_double).to have_received(:rollout_complete!)
+      end
+    end
+
+    context "when review fails" do
+      before do
+        allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new { raise play_store_review_error })
+      end
+
+      it "marks the submission as failed with action if retry is false" do
+        rollout.start_release!
+        rollout.store_submission.reload
+        expect(rollout.store_submission.failed_with_action_required?).to be(true)
+      end
+
+      it "retries (with skip review) if retry is true" do
+        rollout.start_release!(retry_on_review_fail: true)
+        expect(providable_dbl).to have_received(:rollout_release).with(anything, anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: false).once
+      end
+    end
+  end
+
+  describe "#move_to_next_stage!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "completes the rollout if no more stages left" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(rollout.completed?).to be(true)
+    end
+
+    it "starts the rollout if it was created" do
+      rollout = create(:store_rollout, :created, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100])
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(rollout.started?).to be(true)
+    end
+
+    it "updates the external release if the rollout was started" do
+      rollout = create(:store_rollout, :created, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100])
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to have_received(:perform_async).with(store_submission.id)
+    end
+
+    it "does not update the external release if the rollout was already started" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100])
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).not_to have_received(:perform_async)
+    end
+
+    it "promotes the deployment run with the next stage percentage" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(providable_dbl).to(
+        have_received(:rollout_release)
+          .with(anything, anything, anything, 100, anything, anything)
+      )
+    end
+
+    it "updates the current stage with the next stage if promote succeeds" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(rollout.current_stage).to eq(2)
+    end
+
+    it "does not update the current stage with the next stage if promote fails" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new { raise })
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+      expect(rollout.errors?).to be(true)
+      expect(rollout.current_stage).to eq(1)
+    end
+
+    it "can fail again on retry" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new { raise })
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      # first attempt
+      rollout.move_to_next_stage!
+      expect(rollout.errors?).to be(true)
+
+      # retry attempt
+      rollout.move_to_next_stage!
+      expect(rollout.errors?).to be(true)
+    end
+
+    it "retries (with skip review) when review fails" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.move_to_next_stage!
+
+      expect(providable_dbl).to have_received(:rollout_release).with(anything, anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: false).once
+    end
+
+    context "when it updates stage" do
+      it "updates stage to be started when moving between stages" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 0)
+        allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+        allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+        rollout.move_to_next_stage!
+
+        expect(rollout.reload.current_stage).to eq(1)
+        expect(rollout.started?).to be(true)
+      end
+
+      it "completes rollout when reaching final stage" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+        allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+        allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+        rollout.move_to_next_stage!
+
+        expect(rollout.reload.current_stage).to eq(2)
+        expect(rollout.completed?).to be(true)
+      end
+    end
+  end
+
+  describe "#release_fully!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "does nothing if the rollout hasn't started" do
+      rollout = create(:store_rollout, :created, :play_store, release_platform_run:, store_submission:)
+      rollout.release_fully!
+
+      expect(rollout.fully_released?).to be(false)
+    end
+
+    it "does nothing if the rollout is completed" do
+      rollout = create(:store_rollout, :completed, :play_store, release_platform_run:, store_submission:)
+      rollout.release_fully!
+
+      expect(rollout.fully_released?).to be(false)
+    end
+
+    it "does nothing if the rollout is halted" do
+      rollout = create(:store_rollout, :halted, :play_store, release_platform_run:, store_submission:)
+      rollout.release_fully!
+
+      expect(rollout.fully_released?).to be(false)
+    end
+
+    it "informs the production release about rollout complete" do
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:)
+      allow(rollout).to receive_messages(provider: providable_dbl, parent_release: production_release)
+      allow(production_release).to receive(:rollout_complete!)
+
+      rollout.release_fully!
+
+      expect(production_release).to have_received(:rollout_complete!)
+      expect(rollout.fully_released?).to be(true)
+    end
+
+    it "does not inform the production release when rollout cannot complete" do
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new { raise })
+
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:)
+      allow(rollout).to receive_messages(provider: providable_dbl, parent_release: production_release)
+      allow(production_release).to receive(:rollout_complete!)
+
+      rollout.release_fully!
+
+      expect(production_release).not_to have_received(:rollout_complete!)
+      expect(rollout.fully_released?).to be(false)
+    end
+
+    it "updates the submission external release" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive_messages(provider: providable_dbl, parent_release: production_release)
+      allow(production_release).to receive(:rollout_complete!)
+
+      rollout.release_fully!
+
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to have_received(:perform_async).with(store_submission.id)
+    end
+
+    it "retries (with skip review) when review fails" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.release_fully!
+
+      expect(providable_dbl).to have_received(:rollout_release).with(anything, anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: false).once
+    end
+  end
+
+  describe "#halt_release!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "halts the rollout if started" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(rollout.halted?).to be(true)
+    end
+
+    it "does nothing if the rollout hasn't started" do
+      rollout = create(:store_rollout, :created, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(rollout.halted?).to be(false)
+    end
+
+    it "does nothing if the rollout is completed" do
+      rollout = create(:store_rollout, :completed, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(rollout.halted?).to be(false)
+    end
+
+    it "updates the submission external release" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to have_received(:perform_async).with(store_submission.id)
+    end
+
+    it "retries (with skip review) when review fails" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(providable_dbl).to have_received(:halt_release).with(anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: false).once
+    end
+
+    it "clears the automatic rollout schedule when automatic rollout is enabled" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+        automatic_rollout: true, automatic_rollout_next_update_at: 5.minutes.from_now)
+      allow(providable_dbl).to receive(:halt_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.halt_release!
+
+      expect(rollout.reload.automatic_rollout_next_update_at).to be_nil
+    end
+  end
+
+  describe "#pause_release!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+
+    before do
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    context "when automatic rollout is enabled" do
+      it "pauses the rollout if started" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: true)
+
+        rollout.pause_release!
+
+        expect(rollout.paused?).to be(true)
+      end
+
+      it "clears the automatic rollout schedule" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: true,
+          automatic_rollout_next_update_at: 24.hours.from_now)
+
+        rollout.pause_release!
+
+        expect(rollout.reload.automatic_rollout_next_update_at).to be_nil
+      end
+
+      it "keeps the automatic_rollout flag enabled" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: true)
+
+        rollout.pause_release!
+
+        expect(rollout.reload.automatic_rollout).to be(true)
+      end
+    end
+
+    context "when automatic rollout is disabled" do
+      it "does not pause the rollout" do
+        rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: false)
+
+        rollout.pause_release!
+
+        expect(rollout.paused?).to be(false)
+        expect(rollout.started?).to be(true)
+      end
+    end
+  end
+
+  describe "#disable_automatic_rollout!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+
+    it "clears the automatic rollout schedule and disables automatic rollout" do
+      rollout = create(:store_rollout, :started, :play_store, release_platform_run:, store_submission:,
+        automatic_rollout: true, automatic_rollout_next_update_at: 5.minutes.from_now)
+
+      rollout.disable_automatic_rollout!
+
+      expect(rollout.reload.automatic_rollout).to be(false)
+      expect(rollout.automatic_rollout_next_update_at).to be_nil
+    end
+  end
+
+  describe "#resume_release!" do
+    let(:release_platform_run) { create(:release_platform_run) }
+    let(:production_release) { create(:production_release, release_platform_run:) }
+    let(:store_submission) { create(:play_store_submission, :prepared, :prod_release, release_platform_run:, parent_release: production_release) }
+    let(:providable_dbl) { instance_double(GooglePlayStoreIntegration) }
+
+    before do
+      allow(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to receive(:perform_async)
+    end
+
+    it "resumes the rollout if halted" do
+      rollout = create(:store_rollout, :halted, :play_store, release_platform_run:, store_submission:, config: [1, 80], current_stage: 0)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.resume_release!
+
+      expect(rollout.started?).to be(true)
+    end
+
+    it "resumes the rollout if paused" do
+      rollout = create(:store_rollout, :paused, :play_store, release_platform_run:, store_submission:, config: [1, 80], current_stage: 0)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.resume_release!
+
+      expect(rollout.started?).to be(true)
+    end
+
+    context "when automatic rollout is enabled" do
+      it "schedules the next automatic rollout job" do
+        rollout = create(:store_rollout, :paused, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: true)
+        allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+        allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+        freeze_time do
+          expect {
+            rollout.resume_release!
+          }.to change(AutomaticUpdateRolloutJob.jobs, :size).by(1)
+          expect(rollout.reload.automatic_rollout_updated_at).to eq(Time.current)
+          expect(rollout.automatic_rollout_next_update_at).to eq(PlayStoreRollout::AUTO_ROLLOUT_RUN_INTERVAL.from_now)
+        end
+      end
+    end
+
+    context "when automatic rollout is disabled" do
+      it "does not schedule the automatic rollout job" do
+        rollout = create(:store_rollout, :paused, :play_store, release_platform_run:, store_submission:,
+          config: [1, 80], current_stage: 0, automatic_rollout: false)
+        allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+        allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+        expect {
+          rollout.resume_release!
+        }.not_to change(AutomaticUpdateRolloutJob.jobs, :size)
+      end
+    end
+
+    it "does not resume the rollout if store call fails" do
+      rollout = create(:store_rollout, :halted, :play_store, release_platform_run:, store_submission:, config: [1, 80], current_stage: 0)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new { raise })
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.resume_release!
+
+      expect(rollout.halted?).to be(true)
+      expect(rollout.errors?).to be(true)
+    end
+
+    it "updates the submission external release" do
+      rollout = create(:store_rollout, :halted, :play_store, release_platform_run:, store_submission:)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.resume_release!
+
+      expect(StoreSubmissions::PlayStore::UpdateExternalReleaseJob).to have_received(:perform_async).with(store_submission.id)
+    end
+
+    it "retries (with skip review) when review fails" do
+      rollout = create(:store_rollout, :halted, :play_store, release_platform_run:, store_submission:, config: [1, 80, 100], current_stage: 1)
+      allow(providable_dbl).to receive(:rollout_release).and_return(GitHub::Result.new)
+      allow(rollout).to receive(:provider).and_return(providable_dbl)
+
+      rollout.resume_release!
+
+      expect(providable_dbl).to have_received(:rollout_release).with(anything, anything, anything, anything, anything, retry_on_review_fail: true, raise_on_lock_error: false).once
+    end
+  end
+end

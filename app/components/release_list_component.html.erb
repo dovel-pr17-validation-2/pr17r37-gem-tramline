@@ -1,0 +1,200 @@
+<%= render ContainerComponent.new(title: train.name, subtitle: train.description) do |container| %>
+  <% if train.hotfixable? %>
+    <% container.with_action do %>
+      <%= render ModalComponent.new(title: "Start a hotfix release",
+                                    subtitle: "This will be against your last successful release #{hotfix_from.release_version}") do |modal| %>
+        <% button = modal.with_button(scheme: :light,
+                                      type: :action,
+                                      size: :xxs,
+                                      arrow: :none) %>
+        <% button.with_icon("band_aid.svg") %>
+        <% button.with_title_text.with_content("Start a hotfix") %>
+        <% modal.with_body do %>
+          <%= render partial: "trains/hotfix_form", locals: {app: app, train: train, hotfix_from: hotfix_from} %>
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>
+
+  <%= container.with_side_action do %>
+    <%= render DropdownComponent.new(authz: false) do |dropdown| %>
+      <% dropdown.with_button(html_options: {class: "-my-5"}).with_title_text do %>
+        <span class="text-xs text-secondary dark:text-secondary-50 font-medium">Switch</span>
+      <% end %>
+
+      <% dropdown.with_item_group do |group| %>
+        <% app.trains.each do |t| %>
+          <% group.with_item(link: {path: app_train_releases_path(app, t)}, selected: train.id == t.id) do %>
+            <%= t.name %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>
+
+  <%= container.with_side_action do %>
+    <%= render ButtonComponent.new(scheme: :light, type: :link, size: :xxs, options: new_app_train_path(app)) do |b|
+          b.with_tooltip("Add a new train")
+          b.with_icon("plus.svg", size: :md)
+        end %>
+  <% end %>
+
+  <%= container.with_action do %>
+    <%= render PrepareReleaseComponent.new(train:, label: "Prepare new release") %>
+  <% end %>
+
+  <% container.with_sub_action do %>
+    <%= render ButtonComponent.new(
+          scheme: :supporting,
+          label: "Configure",
+          authz: false,
+          options: edit_app_train_path(app, train),
+          disabled: !app.ready?,
+          type: :link
+        ) do |b|
+          b.with_icon("cog.svg")
+        end %>
+  <% end %>
+
+  <% if train.activatable? %>
+    <% container.with_sub_action do %>
+      <%= render ButtonComponent.new(
+            scheme: :supporting,
+            label: "Activate",
+            options: activate_app_train_path(app, train),
+            type: :button,
+            html_options: {method: :patch,
+                           data: {turbo_method: :patch,
+                                  turbo_confirm: "This will start scheduling release kickoff(s). Are you sure?"}}
+          ) do |b|
+            b.with_icon("play.svg")
+          end %>
+    <% end %>
+  <% end %>
+
+  <% if train.deactivatable? %>
+    <% container.with_sub_action do %>
+      <%= render ButtonComponent.new(
+            scheme: :supporting,
+            label: "Deactivate",
+            options: deactivate_app_train_path(app, train),
+            type: :button,
+            html_options: {method: :patch,
+                           data: {turbo_method: :patch,
+                                  turbo_confirm: "This will cancel all the scheduled release kickoff(s). Are you sure?"}}
+          ) do |b|
+            b.with_icon("pause.svg")
+          end %>
+    <% end %>
+  <% end %>
+
+  <% if no_releases? %>
+    <% container.with_sub_action do %>
+      <%= render ButtonComponent.new(
+            scheme: :supporting,
+            label: "Remove",
+            options: app_train_path(app, train),
+            type: :button,
+            html_options: {method: :delete, data: {turbo_method: :delete, turbo_confirm: "Are you sure you want to remove this train?"}}
+          ) do |b|
+            b.with_icon("trash.svg")
+          end %>
+    <% end %>
+  <% end %>
+
+  <% unless train.active_runs.exists? %>
+    <% container.with_sub_action do %>
+      <%= render ButtonComponent.new(
+            scheme: :supporting,
+            label: "Archive",
+            options: archive_app_train_path(app, train),
+            type: :button,
+            html_options: {method: :patch, data: {turbo_method: :patch, turbo_confirm: "Are you sure you want to archive this train? It will be hidden from the dashboard."}}
+          ) do |b|
+            b.with_icon("archive.svg")
+          end %>
+    <% end %>
+  <% end %>
+
+  <% container.with_body do %>
+    <%= render partial: "shared/app_not_ready", locals: {app:} %>
+
+    <% if train.automatic? %>
+      <%= render ScheduledTrainComponent.new(train) %>
+    <% end %>
+
+    <%= render ReleaseOverviewComponent.new(hotfix_release) %>
+    <%= render ReleaseOverviewComponent.new(ongoing_release) %>
+    <% if Flipper.enabled?(:allow_multiple_upcoming_releases, train) %>
+      <% train.upcoming_releases.each do |rel| %>
+        <%= render ReleaseOverviewComponent.new(rel) %>
+      <% end %>
+    <% else %>
+      <%= render ReleaseOverviewComponent.new(upcoming_release) %>
+    <% end %>
+    <%= render ReleaseOverviewComponent.new(last_finished_release) %>
+
+    <% if devops_report.present? %>
+      <%= render SectionComponent.new(style: :titled, title: "Mobile DevOps") do %>
+        <div class="grid grid-cols-4 item-gap-default">
+          <%= render ChartComponent.new(devops_report.frequency) %>
+          <%= render ChartComponent.new(devops_report.duration) %>
+          <div><!-- grid maintenance --></div>
+          <div><!-- grid maintenance --></div>
+          <%= render ChartComponent.new(devops_report.patch_fixes) if devops_report.patch_fixes.present? %>
+          <%= render ChartComponent.new(devops_report.hotfixes) if devops_report.hotfixes.present? %>
+
+          <% if ios_enabled? %>
+            <%= render ChartComponent.new(devops_report.time_in_review) %>
+          <% else %>
+            <div><!-- grid maintenance --></div>
+          <% end %>
+
+          <div class="col-span-2">
+            <%= render ChartComponent.new(devops_report.time_in_phases) %>
+          </div>
+
+          <% if devops_report.reldex_scores.present? %>
+            <div class="col-span-2">
+              <%= render ChartComponent.new(devops_report.reldex_scores) %>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+
+      <%= render SectionComponent.new(style: :titled, title: "Operational Efficiency") do %>
+        <div class="grid grid-cols-4 item-gap-default">
+          <%= render ChartComponent.new(devops_report.contributors) %>
+          <%= render ChartComponent.new(devops_report.stability_contributors) %>
+          <div><!-- grid maintenance --></div>
+          <div><!-- grid maintenance --></div>
+
+          <% if teams_supported? %>
+            <div class="col-span-2">
+              <%= render ChartComponent.new(devops_report.team_contributors) %>
+            </div>
+
+            <div class="col-span-2">
+              <%= render ChartComponent.new(devops_report.team_stability_contributors) %>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+    <% end %>
+    <% previous_releases_turbo_frame = EnhancedTurboFrameComponent.new("previous_releases", src: previous_releases_app_train_releases_path(params[:app_id], params[:train_id])) %>
+    <% previous_releases_turbo_frame.with_loading_indicator %>
+    <%= render previous_releases_turbo_frame %>
+  <% end %>
+
+  <% if no_releases? %>
+    <% container.with_empty_state do %>
+      <%= render EmptyStateComponent.new(title: no_release_empty_state[:title], text: no_release_empty_state[:text], banner_image: "art/no_releases.png") do %>
+        <% if no_release_empty_state[:content].present? %>
+          <div>
+            <%= no_release_empty_state[:content] %>
+          </div>
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>
+<% end %>

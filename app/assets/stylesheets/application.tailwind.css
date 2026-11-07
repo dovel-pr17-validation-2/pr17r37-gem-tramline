@@ -1,0 +1,522 @@
+@tailwind base;
+@tailwind components;
+
+/* new styles */
+
+@layer base {
+  @supports (font-variation-settings: normal) {
+    @font-face {
+      font-family: "Geist";
+      font-weight: 100 900;
+      font-display: swap;
+      src: url("/fonts/GeistVF.woff2") format("woff2");
+    }
+  }
+
+  :root {
+    --color-reldex-excellent: theme("colors.reldexExcellent.300");
+    --color-reldex-acceptable: theme("colors.reldexAcceptable.300");
+    --color-reldex-mediocre: theme("colors.reldexMediocre.300");
+  }
+}
+
+@layer utilities {
+  .bg-diagonal-stripes-soft-gray {
+    background: repeating-linear-gradient(
+      45deg,
+      rgb(255, 255, 255) 0px,
+      rgb(255, 255, 255) 4px,
+      rgb(242, 242, 242) 4px,
+      rgb(242, 242, 242) 8px
+    );
+  }
+
+  .bg-diagonal-stripes-soft-red {
+    background: repeating-linear-gradient(
+      45deg,
+      rgb(255, 255, 255) 0px,
+      rgb(255, 255, 255) 4px,
+      #fdf1f1 4px,
+      #fdf1f1 8px
+    );
+  }
+
+  .bg-diagonal-stripes-soft-blue {
+    background: repeating-linear-gradient(
+      45deg,
+      rgb(255, 255, 255) 0px,
+      rgb(255, 255, 255) 4px,
+      #ebf7fd 4px,
+      #ebf7fd 8px
+    );
+  }
+
+  .header-shadow {
+    box-shadow: 0 2px 2px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  }
+
+  .small-caps {
+    font-variant: small-caps;
+  }
+
+  .all-small-caps {
+    font-variant: all-small-caps;
+  }
+
+  .tracking-tightish {
+    letter-spacing: -0.02em;
+  }
+
+  .tracking-wideish {
+    letter-spacing: 0.035em;
+  }
+
+  .tracking-neat {
+    letter-spacing: -0.01em;
+  }
+
+  .shadow-default {
+    @apply shadow-sm;
+  }
+
+  .bottom-separator-space-default {
+    @apply mb-7;
+  }
+
+  .top-separator-space-default {
+    @apply mt-7;
+  }
+
+  .section-gap-default {
+    @apply gap-7;
+  }
+
+  .item-gap-default {
+    @apply gap-3;
+  }
+
+  .paragraph-gap-default {
+    @apply gap-1;
+  }
+
+  .box-padding {
+    @apply px-4 py-3.5;
+  }
+
+  .box-padding-md {
+    @apply px-2 py-2;
+  }
+
+  .box-padding-sm {
+    @apply px-1.5 py-0.5;
+  }
+
+  .border-default-t {
+    @apply border-t border-t-main-200 dark:border-t-main-600;
+  }
+
+  .border-default-r {
+    @apply border-r border-r-main-200 dark:border-r-main-600;
+  }
+
+  .border-default-b {
+    @apply border-b border-b-main-200 dark:border-b-main-600;
+  }
+
+  .border-default-l {
+    @apply border-l border-l-main-200 dark:border-l-main-600;
+  }
+
+  .border-default {
+    @apply border border-main-200 dark:border-main-600 rounded-lg;
+  }
+
+  .border-default-md {
+    @apply border border-main-200 dark:border-main-600 rounded-md;
+  }
+
+  .divide-default {
+    @apply divide-y divide-main-200 dark:divide-main-600;
+  }
+
+  .card-default {
+    @apply box-padding border-default bg-white dark:bg-slate-800;
+  }
+
+  .heading-1 {
+    @apply text-2xl font-medium tracking-tightish text-main dark:text-white;
+  }
+
+  .heading-2 {
+    @apply text-xl font-medium tracking-neat text-main dark:text-white;
+  }
+
+  .heading-3 {
+    @apply text-lg font-normal tracking-tightish text-main dark:text-white;
+  }
+
+  .heading-4 {
+    @apply text-base font-normal tracking-neat text-main dark:text-white;
+  }
+
+  .heading-5 {
+    @apply text-xs font-medium tracking-normal text-main-600 dark:text-white;
+  }
+
+  .heading-5-sc {
+    @apply text-xs uppercase font-medium tracking-wideish text-main-600 dark:text-white;
+  }
+}
+
+turbo-frame.with-turbo-frame-loader {
+  display: block;
+}
+
+turbo-frame.with-turbo-frame-loader .turbo-frame-loader {
+  display: none;
+}
+
+turbo-frame.with-turbo-frame-loader[busy] > .turbo-frame-loader {
+  opacity: 1;
+  display: block;
+}
+
+turbo-frame.with-turbo-frame-loader[busy] > *:not(.turbo-frame-loader) {
+  opacity: .2;
+}
+
+.tooltip-arrow,
+.tooltip-arrow::before {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+}
+
+.tooltip-arrow {
+  visibility: hidden;
+}
+
+.tooltip-arrow::before {
+  visibility: visible;
+  content: '';
+  transform: rotate(45deg);
+}
+
+[role="tooltip"][data-popper-placement^='top'] > .tooltip-arrow {
+  bottom: -4px;
+}
+
+[role="tooltip"][data-popper-placement^='bottom'] > .tooltip-arrow {
+  top: -4px;
+}
+
+[role="tooltip"][data-popper-placement^='left'] > .tooltip-arrow {
+  right: -4px;
+}
+
+[role="tooltip"][data-popper-placement^='right'] > .tooltip-arrow {
+  left: -4px;
+}
+
+.ql-editor {
+  @apply text-sm !important;
+}
+
+.ql-size-large {
+  @apply text-lg !important;
+}
+
+.ql-size-small {
+  @apply text-xs !important;
+}
+
+.ql-size-huge {
+  @apply text-xl !important;
+}
+
+.ql-toolbar.ql-snow {
+  @apply border-0;
+  @apply border-default-b border-default-t rounded-tl-lg border-default-r rounded-tr-lg border-default-l !important;
+}
+
+.ql-container {
+  @apply whitespace-pre-wrap p-0;
+}
+
+.ql-container.ql-snow {
+  @apply border-0;
+  @apply border-default-b rounded-bl-lg border-default-r rounded-br-lg border-default-l !important;
+  @apply bg-main-50;
+}
+
+.ts-control {
+  @apply bg-main-50 border-none p-0 !important;
+}
+
+.ts-control > .item {
+  @apply bg-blue-700 text-white py-0.5 px-1 !important;
+}
+
+.ts-dropdown {
+  @apply border-default !important;
+}
+
+
+/* new styles */
+
+/* Override color of turbo progress bar */
+.turbo-progress-bar {
+  background-color: orangered;
+  height: 4px;
+}
+
+.emphasize {
+  @apply inline-block pr-1.5 pl-1.5 py-0.5;
+  @apply bg-main-200 text-slate-700;
+}
+
+.emphasize-link {
+  @apply underline;
+  @apply emphasize;
+}
+
+/* Application theme starts here */
+.form-select {
+  @apply pr-10;
+}
+
+.form-checkbox,
+.form-radio {
+  @apply text-indigo-500 border border-slate-300;
+}
+
+/* Typography */
+.h1 {
+  @apply text-4xl font-extrabold tracking-tighter;
+}
+
+.h2 {
+  @apply text-3xl font-extrabold tracking-tighter;
+}
+
+.h3 {
+  @apply text-3xl font-extrabold;
+}
+
+.h4 {
+  @apply text-2xl font-extrabold tracking-tight;
+}
+
+@screen md {
+  .h1 {
+    @apply text-5xl;
+  }
+
+  .h2 {
+    @apply text-4xl;
+  }
+}
+
+/* Buttons */
+.btn,
+.btn-lg,
+.btn-sm,
+.btn-xs {
+  @apply font-normal text-sm inline-flex items-center justify-center border border-transparent rounded leading-5 shadow-sm transition duration-150 ease-in-out;
+}
+
+.btn {
+  @apply px-3 py-2;
+}
+
+.btn-lg {
+  @apply px-4 py-3;
+}
+
+.btn-sm {
+  @apply px-2 py-1;
+}
+
+.btn-xs {
+  @apply px-2 py-0.5;
+}
+
+/* Forms */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+}
+
+.form-input,
+.form-textarea,
+.form-multiselect,
+.form-select,
+.form-checkbox,
+.form-radio {
+  @apply text-sm text-slate-800 bg-white border;
+}
+
+.form-input,
+.form-textarea,
+.form-multiselect,
+.form-select,
+.form-checkbox {
+  @apply rounded;
+}
+
+.form-input,
+.form-textarea,
+.form-multiselect,
+.form-select {
+  @apply leading-5 py-2 px-3 border-slate-200 hover:border-slate-300 focus:border-indigo-300 shadow-sm;
+}
+
+.form-input,
+.form-textarea {
+  @apply placeholder-slate-400;
+}
+
+/* Chrome, Safari and Opera */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+.form-input,
+.form-textarea,
+.form-multiselect,
+.form-select,
+.form-checkbox,
+.form-radio:focus {
+  @apply ring-0;
+}
+
+/* Switch element */
+.form-switch {
+  @apply relative select-none;
+  width: 44px;
+}
+
+.form-switch label {
+  @apply block overflow-hidden cursor-pointer h-6 rounded-full;
+}
+
+.form-switch label > span:first-child {
+  @apply absolute block rounded-full;
+  width: 20px;
+  height: 20px;
+  top: 2px;
+  left: 2px;
+  right: 50%;
+  transition: all .15s ease-out;
+}
+
+.form-switch input[type="checkbox"]:checked + label {
+  @apply bg-indigo-500;
+}
+
+.form-switch input[type="checkbox"]:checked + label > span:first-child {
+  left: 22px;
+}
+
+.form-switch input[type="checkbox"]:disabled + label {
+  @apply cursor-not-allowed bg-slate-100 border border-slate-200;
+}
+
+.form-switch input[type="checkbox"]:disabled + label > span:first-child {
+  @apply bg-slate-400;
+}
+
+/* Application theme ends here */
+
+.pagy-info {
+  @apply text-sm text-slate-500 sm:text-left mt-2
+}
+
+.page.next a {
+  @apply inline-flex items-center justify-center rounded leading-5 px-2.5 py-2 bg-white hover:bg-indigo-500 border border-slate-200 text-slate-600 hover:text-white shadow-sm
+}
+
+.page.prev a {
+  @apply inline-flex items-center justify-center rounded leading-5 px-2.5 py-2 bg-white hover:bg-indigo-500 border border-slate-200 text-slate-600 hover:text-white shadow-sm
+}
+
+.page.next.disabled {
+  @apply inline-flex items-center justify-center rounded leading-5 px-2.5 py-2 bg-white border border-main-300 bg-slate-200 text-secondary shadow-sm
+}
+
+.page.prev.disabled {
+  @apply inline-flex items-center justify-center rounded leading-5 px-2.5 py-2 bg-white border border-main-300 bg-slate-200 text-secondary shadow-sm
+}
+
+.page a, .page.gap {
+  @apply inline-flex items-center justify-center leading-5 px-3.5 py-2 bg-white hover:bg-indigo-500 border border-slate-200 text-slate-600 hover:text-white shadow-sm
+}
+
+.page.active {
+  @apply inline-flex items-center justify-center leading-5 px-3.5 py-2 bg-main-200 border border-slate-200 font-medium
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  pointer-events: all;
+  width: 15px;
+  height: 15px;
+  background-color: #fff;
+  border: 0.5px solid #C6C6C6;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #C6C6C6;
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  -webkit-appearance: none;
+  pointer-events: all;
+  width: 15px;
+  height: 15px;
+  background-color: #fff;
+  border: 0.5px solid #C6C6C6;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #C6C6C6;
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background: #f7f7f7;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #f7f7f7;
+}
+
+input[type="range"]:focus::-webkit-slider-thumb {
+  border: 1px solid #C6C6C6;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  width: 100%;
+  position: absolute;
+  background-color: #C6C6C6;
+  pointer-events: none;
+}
+
+input[type="range"]::-moz-range-progress {
+  background: none !important;
+}
+
+#fromSlider {
+  height: 0;
+  z-index: 1;
+}
+
+@tailwind utilities;

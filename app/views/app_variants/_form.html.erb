@@ -1,0 +1,21 @@
+<% form.with_section(heading: "Settings") do |section| %>
+  <% section.with_description do %>
+    <div class="flex flex-col gap-2.5">
+      <p>App variants are akin to <strong>product flavors</strong> or <strong>build variants</strong>, but with an
+        explicit requirement of having a different bundle identifier and their own integrations.</p>
+      <p>For example, you can setup a staging variant with bundle identifier:
+        <code><%= bundle_id + ".staging" %></code> that gets deployed to an entirely different Firebase
+        account.</p>
+      <p>Save the variant first, and then you can configure the integrations for it.</p>
+    </div>
+  <% end %>
+
+  <div><%= section.F.labeled_text_field :name, "Name", placeholder: "Enter app name...", required: true %></div>
+
+  <div>
+    <%= section.F.labeled_text_field :bundle_identifier, "Bundle Identifier", placeholder: "eg., com.just.use.rails", required: true %>
+    <div class="text-sm mt-1">If you're going to deploy to the App Store or Play Store, this <strong>must</strong>
+      match the identifier in the store listing.
+    </div>
+  </div>
+<% end %>

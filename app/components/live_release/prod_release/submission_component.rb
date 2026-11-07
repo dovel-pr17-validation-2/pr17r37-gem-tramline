@@ -1,0 +1,202 @@
+# frozen_string_literal: true
+
+class LiveRelease::ProdRelease::SubmissionComponent < BaseComponent
+  include Memery
+
+  STATUS = {
+    created: {text: "Not started", status: :inert},
+    preprocessing: {text: "Processing", status: :ongoing},
+    preparing: {text: "Processing", status: :ongoing},
+    prepared: {text: "Ready for review", status: :ongoing},
+    failed_prepare: {text: "Failed to prepare", status: :inert},
+    submitted_for_review: {text: "Submitted for review", status: :inert},
+    review_failed: {text: "Review rejected", status: :failure},
+    approved: {text: "Review approved", status: :ongoing},
+    failed: {text: "Submission failed", status: :failure},
+    failed_with_action_required: {text: "Needs manual submission", status: :failure},
+    cancelled: {text: "Removed from review", status: :inert},
+    finished: {text: "Ready to be released", status: :success}
+  }
+
+  def initialize(submission, inactive: false, title: "Store Submission")
+    @submission = submission
+    @inactive = inactive
+    @change_build_prompt = false
+    @cancel_prompt = false
+    @show_blocked = false
+    @show_block_overridden = false
+    @new_submission_prompt = false
+    @title = title
+  end
+
+  attr_reader :submission
+  delegate :id, :release_platform_run, :external_link, :provider, :parent_release, to: :submission
+  delegate :inflight?, to: :parent_release
+  delegate :release, :blocked_for_production_release?, :blocked_for_production_release_override?, to: :release_platform_run
+
+  def show_blocked_message?
+    release_platform_run.play_store_blocked? && !submission.failed_with_action_required?
+  end
+
+  def actionable?
+    return false if cascading_rollout_actionable?
+    submission.actionable?
+  end
+
+  def inactive? = @inactive
+
+  def before_render
+    compute_prompts
+    super
+  end
+
+  memoize def blocked_release_info
+    train = release.train
+    app = train.app
+
+    if release.upcoming?
+      return {
+        message: "You cannot start this submission until the current ongoing release is finished.",
+        info: {label: "Go to the blocking release", link: ongoing_release_app_train_releases_path(app, train)}
+      }
+    end
+
+    if release.ongoing? && train.hotfix_release.present?
+      return {
+        message: "You cannot start this submission until the current hotfix release is finished.",
+        info: {label: "Go to the blocking release", link: hotfix_release_app_train_releases_path(app, train)}
+      }
+    end
+
+    if release.approvals_blocking?
+      return {
+        message: "You cannot start this submission until all the approvals are completed.",
+        info: {label: "Go to approvals", link: release_approval_items_path(release)}
+      }
+    end
+
+    nil
+  end
+
+  def status
+    return STATUS[:finished] if submission.finished?
+    status_picker(STATUS, submission.status).merge(kind: :status)
+  end
+
+  def store_status
+    submission.store_status&.humanize || NOT_AVAILABLE
+  end
+
+  def store_icon
+    helpers.integration_logo(submission.provider)
+  end
+
+  def form_factor
+    return nil unless submission.is_a?(PlayStoreSubmission)
+    form_factor_key = submission.conf.parsed_production_form_factor
+    return nil unless form_factor_key
+    {
+      text: GooglePlayStoreIntegration::FORM_FACTOR_TRACKS[form_factor_key],
+      icon: "form_factors/#{form_factor_key}.svg"
+    }
+  end
+
+  def submission_logo_bw
+    helpers.integration_logo_bw(submission.provider)
+  end
+
+  memoize def available_builds
+    release_platform_run.available_rc_builds
+  end
+
+  memoize def newer_builds
+    release_platform_run.available_rc_builds(after: current_build)
+  end
+
+  def all_builds
+    (available_builds + [current_build]).sort_by(&:generated_at).reverse
+  end
+
+  def build_display_info(b)
+    builder = b.display_name
+    return "#{builder} – Currently Selected" if b == current_build
+    builder += " – Latest" if release_platform_run.latest_rc_build?(b)
+    builder
+  end
+
+  def changeable?
+    return false if blocked_for_production_release?
+    submission.change_build? && available_builds.present?
+  end
+
+  def compute_prompts
+    if blocked_for_production_release?
+      @show_blocked = true
+      return
+    elsif blocked_for_production_release_override?
+      @show_block_overridden = true
+    end
+
+    return if newer_builds.blank?
+
+    if submission.change_build?
+      @change_build_prompt = true
+    elsif submission.cancellable?
+      @cancel_prompt = true
+    elsif !@inactive && !submission.transitioning?
+      @new_submission_prompt = true
+    end
+  end
+
+  # rubocop:disable Rails/Delegate
+  memoize def previously_completed_rollout_run
+    release_platform_run.previously_completed_rollout_run
+  end
+
+  memoize def previously_completed_release
+    previously_completed_rollout_run&.release
+  end
+  # rubocop:enable Rails/Delegate
+
+  memoize def cascading_rollout_actionable?
+    submission.created? &&
+      submission.finish_rollout_in_next_release? &&
+      previously_completed_rollout_run.present?
+  end
+
+  def previously_completed_release_link
+    release_store_rollouts_path(previously_completed_release)
+  end
+
+  def action
+    if submission.created?
+      message = "You are about to prepare the submission for review.\nAre you sure?"
+      {scheme: :default,
+       type: :button,
+       label: "Prepare for review",
+       disabled: !actionable?,
+       options: prepare_store_submission_path(id),
+       html_options: html_opts(:patch, message, params: {store_submission: {force: false}})}
+    elsif submission.cancellable?
+      message = "You are about to cancel the submission.\nAre you sure?"
+      {scheme: :danger,
+       type: :button,
+       label: "Cancel submission",
+       disabled: !actionable?,
+       options: cancel_store_submission_path(id),
+       html_options: html_opts(:patch, message)}
+    end
+  end
+
+  def current_build
+    submission.build
+  end
+
+  def build_opts(default: nil)
+    options_for_select(all_builds.map { |b| [build_display_info(b), b.id] }, (default.presence || all_builds.first).id)
+  end
+
+  def border_style
+    :dashed if inflight?
+  end
+end

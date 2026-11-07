@@ -1,0 +1,17 @@
+<div class="flex mb-8">
+  <a href="https://tramline.app" target=_blank", rel="nofollow noopener">
+    <%= inline_svg("tramline.svg") %>
+  </a>
+</div>
+
+<div class="mb-6">
+  <h1 class="text-3xl text-slate-800 font-bold mb-1"><%= heading %></h1>
+  <% if subtitle_text.present? %>
+    <span class="text-md text-slate-500"><%= subtitle_text %></span>
+  <% end %>
+</div>
+
+<div class="mb-4">
+  <%= render FlashComponent.new(flash, full_screen: false) %>
+  <%= render ErrorComponent.new(resource, full_screen: false) %>
+</div>

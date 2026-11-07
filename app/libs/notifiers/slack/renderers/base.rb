@@ -1,0 +1,79 @@
+class Notifiers::Slack::Renderers::Base
+  include Rails.application.routes.url_helpers
+
+  NOTIFIERS_RELATIVE_PATH = "app/views/notifiers/slack".freeze
+  ROOT_PATH = Rails.root.join(NOTIFIERS_RELATIVE_PATH)
+  HEADER_TEMPLATE = "header.json.erb".freeze
+  FOOTER_TEMPLATE = "footer.json.erb".freeze
+
+  def self.render_json(**args)
+    new(**args).render_json
+  end
+
+  def initialize(**args)
+    args.each do |key, value|
+      instance_variable_set(:"@#{key}", value)
+      self.class.send(:attr_accessor, key)
+    end
+
+    @template_file = template_file
+  end
+
+  def render_json
+    header_response = JSON.parse(render_header)
+    specific_data = JSON.parse(render_notification)
+    user_content_response = JSON.parse(render_user_content)
+    footer_response = JSON.parse(render_footer)
+    blocks = header_response["blocks"]
+      .concat(specific_data["blocks"])
+      .concat(user_content_response["blocks"])
+      .concat(footer_response["blocks"])
+    {blocks:}
+  end
+
+  def render_header
+    file = File.read(File.join(ROOT_PATH, "header.json.erb"))
+    ERB.new(file).result(binding)
+  end
+
+  def render_notification
+    ERB.new(@template_file).result(binding)
+  end
+
+  def render_footer
+    file = File.read(File.join(ROOT_PATH, FOOTER_TEMPLATE))
+    ERB.new(file).result(binding)
+  end
+
+  def render_user_content
+    file = File.read(File.join(ROOT_PATH, "user_content.json.erb"))
+    ERB.new(file).result(binding)
+  end
+
+  def template_file
+    File.read(File.join(ROOT_PATH, self.class::TEMPLATE_FILE))
+  end
+
+  def safe_string(s) = s.to_s.to_json[1..-2]
+
+  def google_managed_publishing_text
+    "- If managed publishing is disabled, the initial rollout will auto-start upon approval by Google."
+  end
+
+  def google_unmanaged_publishing_text
+    "- If managed publishing is enabled, you'll need to manually release through the Play Console."
+  end
+
+  def apple_publishing_text
+    "- Releases from Tramline are always manually released, you can start the release to users once it is approved from the Tramline release page."
+  end
+
+  def changelog_elements(changes)
+    result = changes.each_with_object([]) do |change, acc|
+      elements = @changelog_linker&.process(change) || [{"type" => "text", "text" => change}]
+      acc << {type: "rich_text_section", elements: elements}
+    end
+
+    result.map(&:to_json).join(",")
+  end
+end

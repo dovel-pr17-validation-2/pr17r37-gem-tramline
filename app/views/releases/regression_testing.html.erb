@@ -1,0 +1,12 @@
+<%= render LiveRelease::ContainerComponent.new(@release, title: @train.name) do |container| %>
+  <% container.with_back_button %>
+  <% container.with_tab(title: "Regression Testing", icon: live_release_tab_configuration.dig(:stability, :regression_testing, :icon)) do %>
+    <%= render PlatformViewComponent.new(@release) do |component| %>
+      <% component.platform_runs.each do |run| %>
+        <div class="grid grid-cols-1">
+          <%= render LiveRelease::RegressionTestingComponent.new(run) %>
+        </div>
+      <% end %>
+    <% end %>
+  <% end %>
+<% end %>

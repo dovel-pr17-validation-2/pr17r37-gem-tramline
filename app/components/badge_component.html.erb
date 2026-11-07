@@ -1,0 +1,20 @@
+<% if color.present? %>
+  <%= inline_styles %>
+  <span class="inline-flex items-center <%= badge_style %> <%= colored_badge_class %>">
+    <span class="w-2 h-2 me-2 rounded-full <%= colored_pill_class %>"></span>
+    <span class="<%= colored_text_class %>"><%= text %></span>
+  </span>
+<% else %>
+  <span class="inline-flex items-center <%= badge_style %>">
+    <span class="inline-flex">
+      <% if pill? %><span class="me-2 w-2 h-2 rounded-full <%= pill %>"></span><% end %>
+      <% if spinner_pill? %><%= render partial: "shared/status_pill_spinner", locals: {color: pill} %><% end %>
+      <% if icon? %><span class="me-1 inline-flex"><%= icon %></span><% end %>
+    </span>
+    <% if link? %>
+      <%= link %>
+    <% else %>
+      <%= text %>
+    <% end %>
+  </span>
+<% end %>

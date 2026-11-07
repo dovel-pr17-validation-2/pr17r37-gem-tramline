@@ -1,0 +1,97 @@
+class Queries::Events
+  def self.all(**params)
+    new(**params).all
+  end
+
+  FILTER_MAPPING = {
+    android_platform: ReleasePlatform.arel_table[:platform],
+    ios_platform: ReleasePlatform.arel_table[:platform]
+  }
+
+  # GitHub::SQL refuses to bind an empty array, so an empty IN list is bound to an id that matches nothing
+  NO_MATCH_ID = "00000000-0000-0000-0000-000000000000".freeze
+
+  def initialize(release:, params:)
+    @release = release
+    @params = params
+  end
+
+  attr_reader :release, :params
+
+  def all
+    Passport.where(stampable_id: stampable_ids).order(event_timestamp: :desc)
+  end
+
+  def stampable_ids
+    run_ids = release
+      .release_platform_runs
+      .joins(:release_platform)
+      .where(ActiveRecord::Base.sanitize_sql_for_conditions(params.filter_by(FILTER_MAPPING)))
+      .pluck(:id)
+
+    results = GitHub::SQL.results <<~SQL.squish, release_id: release.id, run_ids: run_ids.presence || [NO_MATCH_ID]
+      WITH "pull_request_data" AS (
+        SELECT "pull_requests".id
+        FROM "pull_requests"
+        WHERE "pull_requests"."release_id" = :release_id
+      ),
+      "beta_soak_data" AS (
+        SELECT "beta_soaks".id
+        FROM "beta_soaks"
+        WHERE "beta_soaks"."release_id" = :release_id
+      ),
+      "prod_release_data" AS (
+        SELECT "production_releases".id
+        FROM "production_releases"
+        WHERE release_platform_run_id IN :run_ids
+      ),
+      "workflow_run_data" AS (
+        SELECT "workflow_runs".id
+        FROM "workflow_runs"
+        WHERE release_platform_run_id IN :run_ids
+      ),
+      "store_submission_data" AS (
+        SELECT "store_submissions".id
+        FROM "store_submissions"
+        WHERE release_platform_run_id IN :run_ids
+      ),
+      "store_rollout_data" AS (
+        SELECT "store_rollouts".id
+        FROM "store_rollouts"
+        WHERE release_platform_run_id IN :run_ids
+      ),
+      "commit_data" AS (
+        SELECT "commits".id
+        FROM "commits"
+        WHERE "commits"."release_id" = :release_id
+      ),
+      "pre_prod_release_data" AS (
+        SELECT "pre_prod_releases".id
+        FROM "pre_prod_releases"
+        WHERE release_platform_run_id IN :run_ids
+      )
+      SELECT pull_request_data.id FROM pull_request_data
+      UNION
+      SELECT beta_soak_data.id FROM beta_soak_data
+      UNION
+      SELECT prod_release_data.id FROM prod_release_data
+      UNION
+      SELECT workflow_run_data.id FROM workflow_run_data
+      UNION
+      SELECT store_submission_data.id FROM store_submission_data
+      UNION
+      SELECT store_rollout_data.id FROM store_rollout_data
+      UNION
+      SELECT commit_data.id FROM commit_data
+      UNION
+      SELECT pre_prod_release_data.id FROM pre_prod_release_data
+    SQL
+
+    results
+      .pluck("id")
+      .concat(run_ids)
+      .push(release.id)
+      .uniq
+      .compact
+  end
+end

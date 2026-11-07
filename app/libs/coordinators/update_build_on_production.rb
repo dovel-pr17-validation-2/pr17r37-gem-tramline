@@ -1,0 +1,34 @@
+class Coordinators::UpdateBuildOnProduction
+  def self.call(submission, build_id)
+    new(submission, build_id).call
+  end
+
+  def initialize(submission, build_id)
+    @submission = submission
+    @production_release = @submission.parent_release
+    @build = @submission.release_platform_run.rc_builds.find(build_id)
+  end
+
+  def call
+    raise "production release is not actionable" unless submission.actionable?
+    raise "production release is not editable" unless production_release.inflight?
+    raise "build is not valid for production" unless valid_build?
+
+    with_lock do
+      return unless production_release.inflight?
+
+      if submission.attach_build(build)
+        production_release.update!(build:)
+        submission.retrigger!
+        production_release.event_stamp!(reason: :build_updated, kind: :notice, data: production_release.stamp_data)
+      end
+    end
+  end
+
+  attr_reader :submission, :production_release, :build
+  delegate :with_lock, to: :production_release
+
+  def valid_build?
+    submission.release_platform_run.valid_build_for_production?(build)
+  end
+end

@@ -1,0 +1,45 @@
+<% if empty_stat? %>
+  <div class="flex flex-col gap-y-4 card-default">
+    <div class="flex flex-row items-center justify-between">
+      <h5 class="heading-5-sc">
+        <%= name %>
+      </h5>
+
+      <%= render empty_stat_corner_icon %>
+    </div>
+
+    <div class="grid grid-cols-2 divide-x place-content-between">
+      <div class="flex flex-col py-1 first:px-0 px-3 gap-y-1">
+        <div class="text-xs text-secondary-50 uppercase">%</div>
+        <div class="<%= empty_stat_text_size %> text-secondary-50">N/A</div>
+      </div>
+    </div>
+  </div>
+<% else %>
+  <div class="flex flex-col border-default box-padding gap-y-4">
+    <div class="flex flex-row items-center justify-between">
+      <div class="flex items-center justify-start gap-x-1.5">
+        <%= render icon if icon? %>
+
+        <h5 class="heading-5-sc">
+          <%= name %>
+        </h5>
+      </div>
+
+      <% if external_url %>
+        <%= render ButtonComponent.new(
+              scheme: :naked_icon,
+              options: external_url,
+              size: :none,
+              authz: false,
+              type: :link_external
+            ) do |b|
+              b.with_icon("arrow_right.svg", size: :sm)
+              b.with_tooltip(external_url_title, placement: "top")
+            end %>
+      <% end %>
+    </div>
+
+    <%= content %>
+  </div>
+<% end %>

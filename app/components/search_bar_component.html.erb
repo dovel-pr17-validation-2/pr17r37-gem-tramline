@@ -1,0 +1,30 @@
+<div data-controller="search-form" data-search-form-query-value="<%= query_field %>">
+  <div class="flex flex-col item-gap-default">
+    <div class="flex flex-row justify-between">
+      <div class="flex flex-row items-end">
+        <%= text_field_tag search_name, search_value, {
+              placeholder: search_placeholder.presence || "Search",
+              class: "form-input inline-flex w-full #{query_field_width}",
+              autocomplete: "off",
+              autofocus: true,
+              data: {search_form_target: "searchInput", action: "input->search-form#search"}
+            } %>
+
+        <%= link_to "clear", "#", class: "underline hover:cursor-pointer text-xs ml-2", data: {action: "search-form#clear"} %>
+      </div>
+
+      <div class="flex items-end">
+        <%= notice %>
+      </div>
+    </div>
+
+    <% frame = EnhancedTurboFrameComponent.new(turbo_frame, classes: "with-turbo-frame-loader") %>
+    <% frame.with_loading_indicator %>
+    <%= render frame do %>
+      <%= form_with url: form_url, method: :get, data: {search_form_target: "form", turbo_frame:, turbo_action:} do |form| %>
+        <%= form.hidden_field query_field %>
+      <% end %>
+      <%= content %>
+    <% end %>
+  </div>
+</div>
